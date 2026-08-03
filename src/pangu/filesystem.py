@@ -24,7 +24,9 @@ class FilesystemAdapter:
         target.mkdir(parents=True, exist_ok=True)
         return target, target.is_dir()
 
-    def write_text(self, relative_path: str, content: str, overwrite: bool = False) -> tuple[Path, str]:
+    def write_text(
+        self, relative_path: str, content: str, overwrite: bool = False
+    ) -> tuple[Path, str]:
         target = self.resolve(relative_path)
         if target.exists() and not overwrite:
             raise FileExistsError("refusing to overwrite without explicit policy")

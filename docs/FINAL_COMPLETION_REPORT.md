@@ -27,3 +27,7 @@ The required full PANGU specification is substantially broader than this initial
 - Added bounded asynchronous EventBus, dependency-aware Lifecycle Kernel, capability catalog, scope matcher, and safe filesystem adapter.
 - Tool Runtime now enforces registered capability operations and scoped permissions before filesystem execution.
 - Validation after this update: Ruff all checks passed; mypy success for 14 source files; pytest 2 passed. Existing .NET solution build returns success with one warning because the hand-authored solution has no restoreable test projects.
+
+## Test-hardening update
+- Added 24 test cases for EventBus, Lifecycle Kernel, capabilities, permissions, filesystem, approvals, and runtime audit behavior.
+- Python validation: compileall passed; Ruff passed; mypy success for 14 source files; pytest: 26 passed.

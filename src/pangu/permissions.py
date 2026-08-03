@@ -20,6 +20,8 @@ class PermissionStore:
         for grant in self._grants:
             if grant.subject != subject or (grant.expires_at and grant.expires_at < now):
                 continue
-            if grant.scope == required or (grant.scope.endswith(":*") and required.startswith(grant.scope[:-1])):
+            if grant.scope == required or (
+                grant.scope.endswith(":*") and required.startswith(grant.scope[:-1])
+            ):
                 return True
         return False
