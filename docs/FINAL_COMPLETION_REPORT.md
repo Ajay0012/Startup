@@ -22,3 +22,8 @@
 ## Known limits and next actions
 
 The required full PANGU specification is substantially broader than this initial runnable implementation. Real Gemini health, voice/audio/wake word, ONNX, browser automation, dynamic application discovery, Windows control, UI automation, SQLAlchemy/Alembic repositories, mission planner, memory/knowledge systems, authenticated secure-token storage, WinUI 3 rendering, installer, and their mandated tests are not completed. Install Windows App SDK and provide the required physical devices/models/credentials, then implement and validate each independently; see `KNOWN_LIMITATIONS.md` and `MANUAL_VALIDATION.md`.
+
+## Continuation update
+- Added bounded asynchronous EventBus, dependency-aware Lifecycle Kernel, capability catalog, scope matcher, and safe filesystem adapter.
+- Tool Runtime now enforces registered capability operations and scoped permissions before filesystem execution.
+- Validation after this update: Ruff all checks passed; mypy success for 14 source files; pytest 2 passed. Existing .NET solution build returns success with one warning because the hand-authored solution has no restoreable test projects.

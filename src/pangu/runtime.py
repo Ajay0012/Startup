@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .capabilities import CapabilityCatalog, ToolSpecification
 from .config import Settings
-from .contracts import CommandEnvelope, Status, ToolRequest, ToolResult
+from .contracts import CommandEnvelope, Risk, Status, ToolRequest, ToolResult
+from .events import EventBus
 from .language import LanguageRuntime
+from .permissions import PermissionGrant, PermissionStore
 from .persistence import Database
-from .security import SafetyGateway
+from .security import ApprovalStore, SafetyGateway
 from .tools import ToolRuntime
 
 
@@ -16,7 +19,25 @@ class Runtime:
         self.db = Database(settings.runtime_root / "database" / "pangu.db")
         self.language = LanguageRuntime()
         self.safety = SafetyGateway()
-        self.tools = ToolRuntime(settings.root, self.safety)
+        self.events = EventBus()
+        self.catalog = CapabilityCatalog()
+        self.catalog.register(
+            ToolSpecification(
+                "filesystem",
+                "1.0.0",
+                frozenset({"create_folder", "write_text"}),
+                Risk.LOW,
+                frozenset({"filesystem.write:*"}),
+            )
+        )
+        self.catalog.register(
+            ToolSpecification(
+                "system", "1.0.0", frozenset({"battery_status"}), Risk.READ_ONLY, frozenset()
+            )
+        )
+        grants = PermissionStore((PermissionGrant("filesystem.write:*", "default"),))
+        self.approvals = ApprovalStore()
+        self.tools = ToolRuntime(settings.root, self.safety, self.catalog, grants, self.approvals)
         self.started = False
 
     def start(self) -> None:
