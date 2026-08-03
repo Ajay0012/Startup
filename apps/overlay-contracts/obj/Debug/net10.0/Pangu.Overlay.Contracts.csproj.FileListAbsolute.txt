@@ -1,0 +1,11 @@
+E:\Projects\Startup\apps\overlay-contracts\bin\Debug\net10.0\Pangu.Overlay.Contracts.deps.json
+E:\Projects\Startup\apps\overlay-contracts\bin\Debug\net10.0\Pangu.Overlay.Contracts.dll
+E:\Projects\Startup\apps\overlay-contracts\bin\Debug\net10.0\Pangu.Overlay.Contracts.pdb
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\Pangu.Overlay.Contracts.GeneratedMSBuildEditorConfig.editorconfig
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\Pangu.Overlay.Contracts.AssemblyInfoInputs.cache
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\Pangu.Overlay.Contracts.AssemblyInfo.cs
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\Pangu.Overlay.Contracts.csproj.CoreCompileInputs.cache
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\Pangu.Overlay.Contracts.dll
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\refint\Pangu.Overlay.Contracts.dll
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\Pangu.Overlay.Contracts.pdb
+E:\Projects\Startup\apps\overlay-contracts\obj\Debug\net10.0\ref\Pangu.Overlay.Contracts.dll

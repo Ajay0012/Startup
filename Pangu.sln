@@ -1,0 +1,12 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pangu.SessionAgent", "apps\\session-agent\\Pangu.SessionAgent.csproj", "{C5D6AE5F-5F92-4E22-A0CF-F4E1D8A00201}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pangu.Overlay.Contracts", "apps\\overlay-contracts\\Pangu.Overlay.Contracts.csproj", "{B745D1D7-55C1-4E11-B5E4-4EA6C2020202}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pangu.OverlayHost", "apps\\overlay-host\\Pangu.OverlayHost.csproj", "{D902E2F4-AC7E-4773-9033-6FC202020303}"
+EndProject
+Global
+EndGlobal

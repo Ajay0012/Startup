@@ -1,0 +1,40 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0/win-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {},
+    ".NETCoreApp,Version=v10.0/win-x64": {
+      "Pangu.OverlayHost/1.0.0": {
+        "dependencies": {
+          "Pangu.Overlay.Contracts": "1.0.0"
+        },
+        "runtime": {
+          "Pangu.OverlayHost.dll": {}
+        }
+      },
+      "Pangu.Overlay.Contracts/1.0.0": {
+        "runtime": {
+          "Pangu.Overlay.Contracts.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Pangu.OverlayHost/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Pangu.Overlay.Contracts/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

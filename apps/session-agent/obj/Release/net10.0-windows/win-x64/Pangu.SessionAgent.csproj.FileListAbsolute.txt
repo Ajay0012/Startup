@@ -1,0 +1,14 @@
+E:\Projects\Startup\apps\session-agent\bin\Release\net10.0-windows\win-x64\Pangu.SessionAgent.exe
+E:\Projects\Startup\apps\session-agent\bin\Release\net10.0-windows\win-x64\Pangu.SessionAgent.deps.json
+E:\Projects\Startup\apps\session-agent\bin\Release\net10.0-windows\win-x64\Pangu.SessionAgent.runtimeconfig.json
+E:\Projects\Startup\apps\session-agent\bin\Release\net10.0-windows\win-x64\Pangu.SessionAgent.dll
+E:\Projects\Startup\apps\session-agent\bin\Release\net10.0-windows\win-x64\Pangu.SessionAgent.pdb
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\Pangu.SessionAgent.GeneratedMSBuildEditorConfig.editorconfig
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\Pangu.SessionAgent.AssemblyInfoInputs.cache
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\Pangu.SessionAgent.AssemblyInfo.cs
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\Pangu.SessionAgent.csproj.CoreCompileInputs.cache
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\Pangu.SessionAgent.dll
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\refint\Pangu.SessionAgent.dll
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\Pangu.SessionAgent.pdb
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\Pangu.SessionAgent.genruntimeconfig.cache
+E:\Projects\Startup\apps\session-agent\obj\Release\net10.0-windows\win-x64\ref\Pangu.SessionAgent.dll

@@ -1,0 +1,7 @@
+E:\Projects\Startup\dist\overlay-host\Pangu.OverlayHost.exe
+E:\Projects\Startup\dist\overlay-host\Pangu.OverlayHost.dll
+E:\Projects\Startup\dist\overlay-host\Pangu.OverlayHost.deps.json
+E:\Projects\Startup\dist\overlay-host\Pangu.OverlayHost.runtimeconfig.json
+E:\Projects\Startup\dist\overlay-host\Pangu.OverlayHost.pdb
+E:\Projects\Startup\dist\overlay-host\Pangu.Overlay.Contracts.dll
+E:\Projects\Startup\dist\overlay-host\Pangu.Overlay.Contracts.pdb

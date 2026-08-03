@@ -1,0 +1,5 @@
+E:\Projects\Startup\dist\session-agent\Pangu.SessionAgent.exe
+E:\Projects\Startup\dist\session-agent\Pangu.SessionAgent.dll
+E:\Projects\Startup\dist\session-agent\Pangu.SessionAgent.deps.json
+E:\Projects\Startup\dist\session-agent\Pangu.SessionAgent.runtimeconfig.json
+E:\Projects\Startup\dist\session-agent\Pangu.SessionAgent.pdb
