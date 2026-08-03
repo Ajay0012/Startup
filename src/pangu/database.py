@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
@@ -9,6 +9,8 @@ from pathlib import Path
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+
+from .contracts import CommandEnvelope, ToolResult
 
 
 class Base(DeclarativeBase):
@@ -106,9 +108,33 @@ class DatabaseService:
             foreign_keys = connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
         return {"status": "ready", "journal_mode": str(mode), "foreign_keys": str(foreign_keys)}
 
+    def record(self, command: CommandEnvelope, result: ToolResult) -> None:
+        with self.transaction() as session:
+            session.add(
+                CommandRow(
+                    id=command.command_id,
+                    utterance=command.original_utterance,
+                    trace_id=command.trace_id,
+                    created_at=command.timestamp,
+                )
+            )
+            session.flush()
+            session.add(
+                AuditRow(
+                    command_id=command.command_id,
+                    status=str(result.status),
+                    message=result.message,
+                    evidence=result.evidence,
+                    created_at=command.timestamp,
+                )
+            )
+
+    def audit_count(self) -> int:
+        with self.transaction() as session:
+            return session.query(AuditRow).count()
+
     def stop(self) -> None:
         if self._engine is not None:
             self._engine.dispose()
             self._engine = None
             self._sessions = None
-

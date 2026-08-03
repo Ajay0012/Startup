@@ -228,8 +228,6 @@ def test_runtime_audits_folder_command(tmp_path: Path) -> None:
     runtime.start()
     try:
         assert runtime.command("create folder output").status == Status.VERIFIED
-        assert (
-            runtime.db.connection.execute("SELECT COUNT(*) FROM audit_entries").fetchone()[0] == 1
-        )
+        assert runtime.db.audit_count() == 1
     finally:
         runtime.stop()

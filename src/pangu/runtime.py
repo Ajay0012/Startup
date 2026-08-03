@@ -5,10 +5,10 @@ from pathlib import Path
 from .capabilities import CapabilityCatalog, ToolSpecification
 from .config import Settings
 from .contracts import CommandEnvelope, Risk, Status, ToolRequest, ToolResult
+from .database import DatabaseService
 from .events import EventBus
 from .language import LanguageRuntime
 from .permissions import PermissionGrant, PermissionStore
-from .persistence import Database
 from .security import ApprovalStore, SafetyGateway
 from .tools import ToolRuntime
 
@@ -16,7 +16,7 @@ from .tools import ToolRuntime
 class Runtime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.db = Database(settings.runtime_root / "database" / "pangu.db")
+        self.db = DatabaseService(settings.runtime_root / "database" / "pangu.db")
         self.language = LanguageRuntime()
         self.safety = SafetyGateway()
         self.events = EventBus()
@@ -45,7 +45,7 @@ class Runtime:
         self.started = True
 
     def stop(self) -> None:
-        self.db.close()
+        self.db.stop()
         self.started = False
 
     def command(self, text: str, source: str = "cli") -> ToolResult:
