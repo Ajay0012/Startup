@@ -14,3 +14,7 @@ runtime-data/*
 .pytest-work/
 
 .pytest-temp-full/
+
+.pytest-work/
+.pytest-run-*/
+.test-runtime/
