@@ -142,3 +142,70 @@ class DatabaseService:
             self._engine.dispose()
             self._engine = None
             self._sessions = None
+
+
+class EventRow(Base):
+    __tablename__ = "events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ToolSpecificationRow(Base):
+    __tablename__ = "tool_specifications"
+    tool_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[str] = mapped_column(String(32), primary_key=True)
+    body: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+
+
+class ToolExecutionRow(Base):
+    __tablename__ = "tool_executions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    command_id: Mapped[str | None] = mapped_column(ForeignKey("commands.id"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+
+
+class PermissionGrantRow(Base):
+    __tablename__ = "permission_grants"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope: Mapped[str] = mapped_column(String(512), nullable=False)
+
+
+class ApprovalConsumptionRow(Base):
+    __tablename__ = "approval_consumptions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    approval_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approvals.approval_id"), unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ApprovalRevocationRow(Base):
+    __tablename__ = "approval_revocations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    approval_id: Mapped[str | None] = mapped_column(ForeignKey("approvals.approval_id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MissionRow(Base):
+    __tablename__ = "missions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MissionTaskRow(Base):
+    __tablename__ = "mission_tasks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class MissionCheckpointRow(Base):
+    __tablename__ = "mission_checkpoints"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
