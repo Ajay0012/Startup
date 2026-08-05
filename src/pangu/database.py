@@ -85,7 +85,9 @@ class DatabaseService:
             cursor.close()
 
         assert self._engine is not None
-        Base.metadata.create_all(self._engine)
+        config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+        config.set_main_option("sqlalchemy.url", f"sqlite:///{self.path.as_posix()}")
+        command.upgrade(config, "head")
         self._sessions = sessionmaker(self._engine, expire_on_commit=False)
 
     @contextmanager
