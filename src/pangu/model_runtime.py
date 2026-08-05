@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -221,3 +222,71 @@ class ContextAssembler:
             "recent": list(recent[-5:]),
             "hash": hashlib.sha256(command.encode()).hexdigest(),
         }
+
+
+class CircuitState(StrEnum):
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
+
+
+@dataclass(frozen=True)
+class ProviderError:
+    error_code: str
+    sanitized_message: str
+    provider: str
+    model: str
+    retryable: bool = False
+
+
+class CircuitBreaker:
+    def __init__(self, threshold: int = 3) -> None:
+        self.threshold, self.failures, self.state = threshold, 0, CircuitState.CLOSED
+
+    def allow(self) -> bool:
+        return self.state != CircuitState.OPEN
+
+    def success(self) -> None:
+        self.failures, self.state = 0, CircuitState.CLOSED
+
+    def failure(self, code: str) -> None:
+        if code in {"CANCELLED", "VALIDATION_ERROR"}:
+            return
+        self.failures += 1
+        if code == "INVALID_CREDENTIALS" or self.failures >= self.threshold:
+            self.state = CircuitState.OPEN
+
+
+@dataclass
+class ModelBudget:
+    max_calls: int = 12
+    max_input_tokens: int = 120000
+    max_output_tokens: int = 24000
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def permit(self, input_tokens: int = 0) -> bool:
+        return (
+            self.calls < self.max_calls
+            and self.input_tokens + input_tokens <= self.max_input_tokens
+        )
+
+    def record(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        if (
+            not self.permit(input_tokens)
+            or self.output_tokens + output_tokens > self.max_output_tokens
+        ):
+            raise ValueError("BUDGET_EXCEEDED")
+        self.calls += 1
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+
+
+class StructuredOutputValidator:
+    def validate(self, raw: str, required_keys: set[str]) -> dict[str, object]:
+        text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        value = json.loads(text)
+        if not isinstance(value, dict) or not required_keys <= set(value):
+            raise ValueError("STRUCTURED_OUTPUT_INVALID")
+        return value
