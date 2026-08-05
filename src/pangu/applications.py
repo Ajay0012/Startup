@@ -7,12 +7,15 @@ production composition root.
 
 from __future__ import annotations
 
+import csv
+import ctypes
 import hashlib
 import os
 import platform
 import re
 import shutil
 import subprocess
+from ctypes import wintypes
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -47,6 +50,17 @@ class VerificationState(StrEnum):
 
 def normalise_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def default_aliases(name: str) -> tuple[str, ...]:
+    key = normalise_name(name)
+    if "chrome" in key:
+        return ("Chrome", "Google Chrome", "chrome browser")
+    if key in {"code", "visual studio code"} or "visual studio code" in key:
+        return ("VS Code", "Visual Studio Code", "Code")
+    if key in {"notepad", "windows notepad"}:
+        return ("Notepad", "Windows Notepad")
+    return ()
 
 
 @dataclass(frozen=True)
@@ -92,7 +106,12 @@ class ApplicationRecord:
             identifier,
             name,
             normalized,
-            aliases=tuple(cast(tuple[str, ...], payload.get("aliases", ()))),
+            aliases=tuple(
+                sorted(
+                    set(default_aliases(name))
+                    | set(cast(tuple[str, ...], payload.get("aliases", ())))
+                )
+            ),
             executable_path=cast(str | None, payload.get("executable_path")),
             executable_name=executable_name,
             launch_arguments=tuple(cast(tuple[str, ...], payload.get("launch_arguments", ()))),
@@ -187,7 +206,10 @@ class RealWindowsApplicationAdapter:
         records: list[ApplicationRecord] = []
         records.extend(self._start_menu())
         records.extend(self._app_paths())
+        records.extend(self._uninstall_entries())
         records.extend(self._path_apps())
+        records.extend(self._appx_packages())
+        records.extend(self._uri_schemes())
         for process in self.processes():
             if process.name.casefold() not in self._blocked:
                 records.append(
@@ -203,6 +225,59 @@ class RealWindowsApplicationAdapter:
                 )
         return records
 
+    def _uninstall_entries(self) -> list[ApplicationRecord]:
+        import winreg
+
+        results: list[ApplicationRecord] = []
+        bases = (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE)
+        views = (0, winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY)
+        key_name = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+        for base in bases:
+            for view in views:
+                try:
+                    root = winreg.OpenKey(base, key_name, 0, winreg.KEY_READ | view)
+                    for index in range(winreg.QueryInfoKey(root)[0]):
+                        try:
+                            child = winreg.OpenKey(root, winreg.EnumKey(root, index))
+                            title, _ = winreg.QueryValueEx(child, "DisplayName")
+                            version = self._registry_value(child, "DisplayVersion")
+                            location = self._registry_value(child, "InstallLocation")
+                            executable = self._first_executable(str(location)) if location else None
+                            results.append(
+                                ApplicationRecord.create(
+                                    str(title),
+                                    executable_path=executable,
+                                    install_source="registry_uninstall",
+                                    version=str(version) if version else None,
+                                    confidence=0.55,
+                                    source_evidence=({"source": "registry_uninstall"},),
+                                )
+                            )
+                        except OSError:
+                            continue
+                except OSError:
+                    continue
+        return results
+
+    @staticmethod
+    def _registry_value(key: object, name: str) -> object | None:
+        import winreg
+
+        try:
+            return cast(object, winreg.QueryValueEx(key, name)[0])  # type: ignore[arg-type]
+        except OSError:
+            return None
+
+    @staticmethod
+    def _first_executable(location: str) -> str | None:
+        path = Path(location)
+        if not path.is_dir():
+            return None
+        try:
+            return str(next(path.glob("*.exe")))
+        except StopIteration:
+            return None
+
     def _start_menu(self) -> list[ApplicationRecord]:
         # .lnk target resolution needs COM; do not infer targets when unavailable.
         roots = [
@@ -212,7 +287,8 @@ class RealWindowsApplicationAdapter:
         return [
             ApplicationRecord.create(
                 link.stem,
-                executable_name=link.name,
+                executable_path=self._resolve_shortcut(link),
+                executable_name=Path(self._resolve_shortcut(link) or link.name).name,
                 install_source="start_menu",
                 confidence=0.6,
                 source_evidence=({"source": "start_menu", "title": link.stem},),
@@ -221,6 +297,23 @@ class RealWindowsApplicationAdapter:
             if root.exists()
             for link in root.rglob("*.lnk")
         ]
+
+    def _resolve_shortcut(self, link: Path) -> str | None:
+        """Use the fixed Shell.Application COM script; the path is an argument, never source text."""
+        if not self._supported():
+            return None
+        script = "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($args[0]);[Console]::Write($s.TargetPath)"
+        try:
+            value = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script, str(link)],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            ).stdout.strip()
+            return value if value.lower().endswith(".exe") and Path(value).is_file() else None
+        except (OSError, subprocess.SubprocessError):
+            return None
 
     def _app_paths(self) -> list[ApplicationRecord]:
         import winreg
@@ -262,7 +355,16 @@ class RealWindowsApplicationAdapter:
         return found
 
     def _path_apps(self) -> list[ApplicationRecord]:
-        names = ("notepad.exe", "chrome.exe", "code.exe")
+        names = {"notepad.exe", "chrome.exe", "code.exe"}
+        for item in os.environ.get("PATH", "").split(os.pathsep):
+            try:
+                names.update(
+                    path.name
+                    for path in Path(item).glob("*.exe")
+                    if path.name.casefold() not in self._blocked
+                )
+            except OSError:
+                continue
         return [
             ApplicationRecord.create(
                 Path(name).stem,
@@ -275,6 +377,70 @@ class RealWindowsApplicationAdapter:
             for name in names
             if (path := shutil.which(name))
         ]
+
+    def _appx_packages(self) -> list[ApplicationRecord]:
+        # Get-StartApps is a bounded Windows facility without a usable stdlib API.
+        if not self._supported():
+            return []
+        try:
+            output = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-StartApps | Select-Object -Property Name,AppID | ConvertTo-Csv -NoTypeInformation",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            ).stdout
+            return [
+                ApplicationRecord.create(
+                    row["Name"],
+                    app_user_model_id=row["AppID"],
+                    package_identity=row["AppID"].split("!")[0],
+                    install_source="appx",
+                    confidence=0.8,
+                    source_evidence=({"source": "appx"},),
+                )
+                for row in csv.DictReader(output.splitlines())
+                if row.get("Name") and row.get("AppID")
+            ]
+        except (OSError, subprocess.SubprocessError):
+            return []
+
+    def _uri_schemes(self) -> list[ApplicationRecord]:
+        import winreg
+
+        if not self._supported():
+            return []
+        result: list[ApplicationRecord] = []
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_CLASSES_ROOT):
+            try:
+                root = winreg.OpenKey(hive, "")
+                for index in range(winreg.QueryInfoKey(root)[0]):
+                    try:
+                        scheme = winreg.EnumKey(root, index)
+                        child = winreg.OpenKey(root, scheme)
+                        if self._registry_value(child, "URL Protocol") is not None and re.fullmatch(
+                            r"[a-z][a-z0-9+.-]{1,31}", scheme, re.IGNORECASE
+                        ):
+                            result.append(
+                                ApplicationRecord.create(
+                                    scheme,
+                                    uri_scheme=scheme,
+                                    install_source="uri_scheme",
+                                    confidence=0.4,
+                                    source_evidence=({"source": "uri_scheme"},),
+                                )
+                            )
+                    except OSError:
+                        continue
+            except OSError:
+                continue
+        return result
 
     def processes(self) -> list[ProcessObservation]:
         if not self._supported():
@@ -299,7 +465,43 @@ class RealWindowsApplicationAdapter:
             return []
 
     def windows(self) -> list[WindowObservation]:
-        return []  # Win32 enumeration is intentionally conservative until validation.
+        if not self._supported():
+            return []
+        user32 = ctypes.windll.user32
+        found: list[WindowObservation] = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        foreground = user32.GetForegroundWindow()
+
+        def visit(handle: int, _: int) -> bool:
+            if not user32.IsWindowVisible(handle):
+                return True
+            length = user32.GetWindowTextLengthW(handle)
+            title = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(handle, title, length + 1)
+            class_name = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(handle, class_name, 256)
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+            # Ignore invisible helper/tool windows, retaining titled or classed top-level windows only.
+            if title.value or class_name.value:
+                found.append(
+                    WindowObservation(
+                        int(handle),
+                        int(pid.value),
+                        title.value[:512],
+                        class_name.value[:256],
+                        bool(user32.IsIconic(handle)),
+                        bool(user32.IsZoomed(handle)),
+                        int(handle) == int(foreground),
+                    )
+                )
+            return True
+
+        try:
+            user32.EnumWindows(callback_type(visit), 0)
+            return found
+        except (OSError, AttributeError):
+            return []
 
     def launch(self, app: ApplicationRecord) -> AdapterResult:
         if not self._supported():
@@ -317,15 +519,47 @@ class RealWindowsApplicationAdapter:
         return AdapterResult(self._supported(), False, "package activation unavailable")
 
     def window_action(self, handle: int, action: str) -> AdapterResult:
-        return AdapterResult(self._supported(), False, "window control unavailable")
+        if not self._supported():
+            return AdapterResult(False, False, "unsupported platform")
+        commands = {"minimize": 6, "maximize": 3, "restore": 9}
+        try:
+            user32 = ctypes.windll.user32
+            if action == "focus":
+                user32.ShowWindow(handle, 9)
+                return AdapterResult(
+                    True,
+                    bool(user32.SetForegroundWindow(handle)),
+                    "foreground restricted" if user32.GetForegroundWindow() != handle else None,
+                )
+            if action not in commands:
+                return AdapterResult(True, False, "unknown window action")
+            return AdapterResult(True, bool(user32.ShowWindow(handle, commands[action])))
+        except (OSError, AttributeError):
+            return AdapterResult(True, False, "window action failed")
 
     def graceful_close(self, handle: int) -> AdapterResult:
-        return self.window_action(handle, "close")
+        if not self._supported():
+            return AdapterResult(False, False, "unsupported platform")
+        try:
+            return AdapterResult(
+                True, bool(ctypes.windll.user32.PostMessageW(handle, 0x0010, 0, 0))
+            )
+        except (OSError, AttributeError):
+            return AdapterResult(True, False, "graceful close failed")
 
     def terminate(self, pid: int) -> AdapterResult:
-        return AdapterResult(
-            self._supported(), False, "termination requires validated Win32 implementation"
-        )
+        if not self._supported():
+            return AdapterResult(False, False, "unsupported platform")
+        try:
+            handle = ctypes.windll.kernel32.OpenProcess(0x0001, False, pid)
+            if not handle:
+                return AdapterResult(True, False, "process access denied")
+            try:
+                return AdapterResult(True, bool(ctypes.windll.kernel32.TerminateProcess(handle, 1)))
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except (OSError, AttributeError):
+            return AdapterResult(True, False, "termination failed")
 
 
 class SimulatedWindowsApplicationAdapter:
@@ -536,6 +770,11 @@ class ApplicationControlRuntime:
         self, operation: str, name: str, approval_token: str | None = None, actor: str = "default"
     ) -> ApplicationOperationResult:
         resolution = self.resolve(name)
+        # A stale executable is never launched. One bounded rediscovery may repair
+        # identity evidence (App Paths, shortcuts, AppX, PATH, process metadata).
+        if resolution.status == ResolutionStatus.STALE:
+            self.catalog.refresh()
+            resolution = self.resolve(name)
         if (
             resolution.status != ResolutionStatus.RESOLVED
             or resolution.selected_application is None
@@ -554,6 +793,30 @@ class ApplicationControlRuntime:
             )
         app = resolution.selected_application
         scope = f"application.control:{operation}"
+        protected = {
+            "msmpeng.exe",
+            "securityhealthservice.exe",
+            "pangu.exe",
+            "pangu-session-agent.exe",
+        }
+        if (
+            operation == "terminate"
+            and (
+                {x.casefold() for x in app.process_names}
+                | {str(app.executable_name or "").casefold()}
+            )
+            & protected
+        ):
+            return ApplicationOperationResult(
+                operation,
+                name,
+                app.application_id,
+                operation,
+                "prohibited",
+                VerificationState.DENIED,
+                0,
+                normalized_error="protected application",
+            )
         if operation == "status":
             processes = [
                 p

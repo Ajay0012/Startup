@@ -8,7 +8,16 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, create_engine, event
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -89,19 +98,23 @@ class ApplicationAliasRow(Base):
     __tablename__ = "application_aliases"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     application_id: Mapped[str] = mapped_column(
-        ForeignKey("applications.application_id"), index=True
+        ForeignKey("applications.application_id", ondelete="CASCADE"), index=True
     )
     alias: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    __table_args__ = (UniqueConstraint("application_id", "alias", name="uq_application_alias"),)
 
 
 class ApplicationEvidenceRow(Base):
     __tablename__ = "application_evidence"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     application_id: Mapped[str] = mapped_column(
-        ForeignKey("applications.application_id"), index=True
+        ForeignKey("applications.application_id", ondelete="CASCADE"), index=True
     )
     source: Mapped[str] = mapped_column(String(128), nullable=False)
     evidence: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("application_id", "source", name="uq_application_evidence_source"),
+    )
 
 
 class ApplicationDiscoveryRunRow(Base):
@@ -177,7 +190,7 @@ class DatabaseService:
                 "lifecycle_state": self.lifecycle_state,
                 "database_ready": False,
                 "migration_revision": None,
-                "migration_head": "0003_application_catalog",
+                "migration_head": "0004_application_catalog_constraints",
                 "migration_at_head": False,
                 "journal_mode": None,
                 "foreign_keys_enabled": False,
@@ -193,7 +206,7 @@ class DatabaseService:
             mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
             foreign_keys = connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
             busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
-        at_head = revision == "0003_application_catalog"
+        at_head = revision == "0004_application_catalog_constraints"
         ready = bool(
             at_head
             and str(mode).lower() == "wal"
@@ -206,7 +219,7 @@ class DatabaseService:
             "lifecycle_state": self.lifecycle_state,
             "database_ready": ready,
             "migration_revision": revision,
-            "migration_head": "0003_application_catalog",
+            "migration_head": "0004_application_catalog_constraints",
             "migration_at_head": at_head,
             "journal_mode": str(mode),
             "foreign_keys_enabled": foreign_keys == 1,
