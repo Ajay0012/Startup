@@ -604,7 +604,7 @@ class GeminiProvider:
             await self.transport.health_check(model, timeout_seconds)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - third-party transport failures must be sanitized here.
             error = self._error(exc, model, None)
             self.last_failure = error
             self._health = error.health_impact
@@ -686,7 +686,7 @@ class GeminiProvider:
                     )
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - third-party transport failures must be sanitized here.
                     error = self._error(exc, model, request.trace_id)
                     self.last_failure = error
                     self._health = error.health_impact

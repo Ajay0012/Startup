@@ -9,7 +9,6 @@ from pangu import cli
 from pangu.runtime_builder import RuntimeBuilder
 from pangu.settings import PanguSettings
 
-
 FAKE_KEY = "AIza" + "A" * 35
 
 
