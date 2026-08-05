@@ -50,7 +50,7 @@ class PanguSettings(BaseSettings):
         return value
 
     @classmethod
-    def load_root(cls, root: Path) -> "PanguSettings":
+    def load_root(cls, root: Path) -> PanguSettings:
         values: dict[str, str] = {}
         env_path = root / ".env"
         if env_path.exists():
