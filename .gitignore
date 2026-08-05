@@ -10,3 +10,5 @@ runtime-data/*
 !runtime-data/.gitkeep
 *.db
 *.log
+
+.pytest-work/
