@@ -12,3 +12,5 @@ runtime-data/*
 *.log
 
 .pytest-work/
+
+.pytest-temp-full/

@@ -91,6 +91,7 @@ class ProviderError:
     trace_id: str | None = None
     health_impact: ProviderHealth = ProviderHealth.DEGRADED
     original_exception_type: str | None = None
+    api_status_code: int | None = None
 
 
 class ProviderFailure(Exception):
@@ -129,7 +130,7 @@ class GoogleGenAITransport:
     async def generate_text(self, model: str, prompt: str, timeout_seconds: float) -> str:
         client = self._client_or_create()
         result = await asyncio.wait_for(
-            asyncio.to_thread(client.models.generate_content, model=model, contents=prompt),
+            client.aio.models.generate_content(model=model, contents=prompt),
             timeout_seconds,
         )
         return str(getattr(result, "text", ""))
@@ -148,16 +149,22 @@ class GoogleGenAITransport:
         contents: list[object] = [prompt, *images]
         client = self._client_or_create()
         result = await asyncio.wait_for(
-            asyncio.to_thread(client.models.generate_content, model=model, contents=contents),
+            client.aio.models.generate_content(model=model, contents=contents),
             timeout_seconds,
         )
         return str(getattr(result, "text", ""))
 
     async def health_check(self, model: str, timeout_seconds: float) -> None:
-        await self.generate_text(model, "Reply with OK.", timeout_seconds)
+        client = self._client_or_create()
+        await asyncio.wait_for(
+            client.aio.models.generate_content(model=model, contents="Reply with exactly OK."),
+            timeout_seconds,
+        )
 
     async def close(self) -> None:
-        self._client = None
+        if self._client is not None:
+            await self._client.aio.aclose()
+            self._client = None
 
 
 class FakeGeminiTransport:
@@ -222,9 +229,9 @@ class CloudContextSanitizer:
         for category, pattern in self._rules:
             sanitized, count = re.subn(
                 pattern,
-                lambda match: str(match.group(1)) + "[REDACTED]"
-                if match.lastindex
-                else "[REDACTED]",
+                lambda match: (
+                    str(match.group(1)) + "[REDACTED]" if match.lastindex else "[REDACTED]"
+                ),
                 sanitized,
             )
             if count:
@@ -447,6 +454,13 @@ class GeminiProvider:
             "models": {role.value: model for role, model in self.models.items()},
             "last_success": self.last_success,
             "last_failure": self.last_failure.error_code if self.last_failure else None,
+            "last_failure_exception_type": (
+                self.last_failure.original_exception_type if self.last_failure else None
+            ),
+            "last_failure_api_status_code": (
+                self.last_failure.api_status_code if self.last_failure else None
+            ),
+            "last_failure_retryable": self.last_failure.retryable if self.last_failure else False,
             "circuit_state": self.circuit.state,
             "retry_after": self.retry_after,
             "active_request_count": self.active_requests,
@@ -459,6 +473,65 @@ class GeminiProvider:
         retryable = False
         health = ProviderHealth.FAILED
         retry_after = None
+        api_status_code: int | None = None
+        from google.genai.errors import APIError
+
+        if isinstance(exc, APIError):
+            api_status_code = int(exc.code) if exc.code is not None else None
+            message = str(exc.message or "").lower()
+            response = exc.response
+            headers = getattr(response, "headers", {}) if response is not None else {}
+            retry_value = headers.get("retry-after") if hasattr(headers, "get") else None
+            try:
+                retry_after = float(retry_value) if retry_value is not None else None
+            except (TypeError, ValueError):
+                retry_after = None
+            if api_status_code in {401, 403}:
+                code, health = (
+                    ProviderErrorCode.INVALID_CREDENTIALS,
+                    ProviderHealth.INVALID_CREDENTIALS,
+                )
+            elif api_status_code == 404:
+                code = ProviderErrorCode.MODEL_UNAVAILABLE
+            elif api_status_code in {408, 504}:
+                code, health, retryable = (
+                    ProviderErrorCode.REQUEST_TIMEOUT,
+                    ProviderHealth.OFFLINE,
+                    True,
+                )
+            elif api_status_code == 429:
+                if "quota" in message or "resource_exhausted" in message:
+                    code, health = ProviderErrorCode.QUOTA_EXHAUSTED, ProviderHealth.QUOTA_EXHAUSTED
+                else:
+                    code, health, retryable = (
+                        ProviderErrorCode.RATE_LIMITED,
+                        ProviderHealth.RATE_LIMITED,
+                        True,
+                    )
+            elif api_status_code in {500, 502, 503}:
+                if "model" in message or "not found" in message:
+                    code = ProviderErrorCode.MODEL_UNAVAILABLE
+                else:
+                    code, health = ProviderErrorCode.NETWORK_UNAVAILABLE, ProviderHealth.OFFLINE
+                retryable = True
+            elif api_status_code == 400:
+                code = (
+                    ProviderErrorCode.MODEL_UNAVAILABLE
+                    if "model" in message or "not found" in message
+                    else ProviderErrorCode.INVALID_RESPONSE
+                )
+            return ProviderError(
+                code,
+                "Gemini API request failed.",
+                self.name,
+                model,
+                retryable,
+                retry_after,
+                trace_id,
+                health,
+                type(exc).__name__,
+                api_status_code,
+            )
         if isinstance(exc, asyncio.CancelledError):
             code = ProviderErrorCode.CANCELLED
             health = ProviderHealth.DEGRADED
@@ -499,6 +572,7 @@ class GeminiProvider:
             trace_id,
             health,
             type(exc).__name__,
+            api_status_code,
         )
 
     async def probe_async(self, timeout_seconds: float) -> ModelResult:
