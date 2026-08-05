@@ -3,7 +3,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from typing import cast
 
+from .applications import (
+    ApplicationOperationResult,
+    ApplicationRecord,
+    ApplicationWindowsResult,
+    ResolutionResult,
+    ResolutionStatus,
+    VerificationState,
+)
 from .runtime_builder import RuntimeBuilder
 from .settings import resolve_application_root
 
@@ -25,6 +34,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("text", nargs="?")
     parser.add_argument("apps_action", nargs="?")
+    parser.add_argument("--limit", type=int, default=25)
+    parser.add_argument("--name")
+    parser.add_argument("--source")
+    parser.add_argument("--kind")
+    parser.add_argument("--all", action="store_true", dest="include_all")
+    parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument(
         "--probe",
         action="store_true",
@@ -77,10 +92,11 @@ async def run_command(args: argparse.Namespace) -> int:
         elif args.command == "apps":
             action = args.text or "list"
             name = args.apps_action
+            before = {item.application_id for item in runtime.list_applications(True)}
             actions = {
                 "discover": runtime.discover_applications,
                 "refresh": runtime.refresh_applications,
-                "list": runtime.list_applications,
+                "list": lambda: runtime.list_applications(args.include_all),
                 "resolve": lambda: runtime.resolve_application(name or ""),
                 "status": lambda: runtime.application_status(name or ""),
                 "windows": lambda: runtime.list_application_windows(name or ""),
@@ -93,14 +109,57 @@ async def run_command(args: argparse.Namespace) -> int:
                 "restart": lambda: runtime.restart_application(name or ""),
             }
             value = actions[action]()  # type: ignore[no-untyped-call]
+            if action == "list":
+                records = cast(list[ApplicationRecord], value)
+                if args.name:
+                    records = [
+                        x for x in records if args.name.casefold() in x.display_name.casefold()
+                    ]
+                if args.source:
+                    records = [
+                        x for x in records if x.install_source.casefold() == args.source.casefold()
+                    ]
+                if args.kind:
+                    records = [
+                        x for x in records if x.application_kind.casefold() == args.kind.casefold()
+                    ]
+                value = records[: max(args.limit, 0)]
             result = (
                 [item.public() if hasattr(item, "public") else item.__dict__ for item in value]
                 if isinstance(value, list)
+                else value.public()
+                if hasattr(value, "public")
                 else value.__dict__
             )
+            if action in {"discover", "refresh"} and not (args.as_json or args.include_all):
+                records = cast(list[ApplicationRecord], value)
+                user_count = sum(x.application_kind == "USER_APPLICATION" for x in records)
+                result = {
+                    "total_discovered": len(records),
+                    "user_applications": user_count,
+                    "excluded_system_records": len(records) - user_count,
+                    "new_records": len([x for x in records if x.application_id not in before]),
+                    "updated_records": len([x for x in records if x.application_id in before]),
+                    "stale_records": sum(x.stale for x in records),
+                    "discovery_run_status": "completed",
+                }
+            exit_code = _application_exit_code(value)
         else:
             result = runtime.decide(text).__dict__
-        print(json.dumps(result, default=str))
+        if args.command == "apps" and action == "list" and not args.as_json:
+            records = cast(list[ApplicationRecord], value)
+            print(
+                "application_id  display_name  kind  source  confidence  running  launch_eligible"
+            )
+            running = {x.name.casefold() for x in runtime.application_control.adapter.processes()}
+            for item in records:
+                print(
+                    f"{item.application_id[:12]}  {item.display_name}  {item.application_kind}  "
+                    f"{item.install_source}  {item.confidence:.2f}  "
+                    f"{(item.executable_name or '').casefold() in running}  {item.launch_eligible}"
+                )
+        else:
+            print(json.dumps(result, default=str))
         return exit_code
     finally:
         try:
@@ -111,6 +170,28 @@ async def run_command(args: argparse.Namespace) -> int:
 
 def main() -> int:
     return asyncio.run(run_command(parse_args()))
+
+
+def _application_exit_code(value: object) -> int:
+    if isinstance(value, (ResolutionResult, ApplicationWindowsResult)):
+        return {
+            ResolutionStatus.NOT_FOUND: 3,
+            ResolutionStatus.AMBIGUOUS: 4,
+            ResolutionStatus.UNSUPPORTED: 7,
+        }.get(value.status, 0)
+    if isinstance(value, ApplicationOperationResult):
+        if value.normalized_error == ResolutionStatus.NOT_FOUND:
+            return 3
+        if value.normalized_error == ResolutionStatus.AMBIGUOUS:
+            return 4
+        return {
+            VerificationState.DENIED: 5,
+            VerificationState.FAILED: 6,
+            VerificationState.UNSUPPORTED: 7,
+            VerificationState.UNVERIFIED: 8,
+            VerificationState.PARTIALLY_VERIFIED: 8,
+        }.get(value.verification_state, 0)
+    return 0
 
 
 if __name__ == "__main__":

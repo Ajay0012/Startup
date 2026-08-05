@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from pangu.runtime_builder import ServiceContainer
@@ -89,8 +89,16 @@ def create_app(container: ServiceContainer) -> FastAPI:
         return runtime.decide(payload.get("text", "")).__dict__
 
     @app.get("/api/v1/applications")
-    def applications() -> dict[str, object]:
-        return {"applications": [item.public() for item in runtime.list_applications()]}
+    def applications(
+        include_excluded: bool = False, x_pangu_actor: str = Header("default")
+    ) -> dict[str, object]:
+        if include_excluded and not container.application_control.permissions.allows(
+            x_pangu_actor, "application.catalog:inspect_excluded"
+        ):
+            raise HTTPException(403, "Administrative catalog inspection permission required")
+        return {
+            "applications": [item.public() for item in runtime.list_applications(include_excluded)]
+        }
 
     @app.post("/api/v1/applications/discover")
     def discover_applications() -> dict[str, object]:
@@ -102,7 +110,7 @@ def create_app(container: ServiceContainer) -> FastAPI:
 
     @app.post("/api/v1/applications/resolve")
     def resolve_application(payload: ApplicationRequest) -> dict[str, object]:
-        return runtime.resolve_application(payload.name).__dict__
+        return runtime.resolve_application(payload.name).public()
 
     @app.post("/api/v1/applications/{operation}")
     def application_operation(operation: str, payload: ApplicationRequest) -> dict[str, object]:
@@ -137,10 +145,6 @@ def create_app(container: ServiceContainer) -> FastAPI:
         app_record = container.application_catalog.get(application_id)
         if app_record is None:
             raise HTTPException(404, "Application not found")
-        return {
-            "windows": [
-                item.__dict__ for item in runtime.list_application_windows(app_record.display_name)
-            ]
-        }
+        return {"windows": runtime.list_application_windows(app_record.display_name).__dict__}
 
     return app

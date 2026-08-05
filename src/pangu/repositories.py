@@ -141,9 +141,24 @@ class ApplicationCatalogRecord:
             application.normalized_name,
             {
                 "aliases": list(application.aliases),
+                "executable_path": application.executable_path,
                 "executable_name": application.executable_name,
+                "launch_arguments": list(application.launch_arguments),
+                "package_identity": application.package_identity,
+                "app_user_model_id": application.app_user_model_id,
+                "uri_scheme": application.uri_scheme,
                 "install_source": application.install_source,
+                "version": application.version,
+                "process_names": list(application.process_names),
+                "window_classes": list(application.window_classes),
                 "source_evidence": list(application.source_evidence),
+                "health_state": application.health_state,
+                "application_kind": application.application_kind,
+                "launch_eligible": application.launch_eligible,
+                "control_eligible": application.control_eligible,
+                "requires_elevation": application.requires_elevation,
+                "protected": application.protected,
+                "exclusion_reason": application.exclusion_reason,
             },
             application.stale,
             application.discovered_at,
@@ -269,6 +284,20 @@ class RuntimeHealthRepository(_Repository):
 
 
 class ApplicationCatalogRepository(_Repository):
+    def list(self) -> list[ApplicationCatalogRecord]:
+        return [
+            ApplicationCatalogRecord(
+                row.application_id,
+                row.display_name,
+                row.normalized_name,
+                row.body,
+                row.stale,
+                row.first_seen_at,
+                row.last_seen_at,
+            )
+            for row in self._session.query(ApplicationCatalogRow).all()
+        ]
+
     def upsert(self, r: ApplicationCatalogRecord) -> ApplicationCatalogRecord:
         row = self._session.get(ApplicationCatalogRow, r.application_id)
         if row is None:

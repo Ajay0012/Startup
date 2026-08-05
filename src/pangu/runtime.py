@@ -7,7 +7,9 @@ from .applications import (
     ApplicationControlRuntime,
     ApplicationOperationResult,
     ApplicationRecord,
+    ApplicationWindowsResult,
     ResolutionResult,
+    ResolutionStatus,
 )
 from .capabilities import CapabilityCatalog
 from .contracts import CommandEnvelope, Status, ToolRequest, ToolResult
@@ -66,6 +68,7 @@ class Runtime:
 
     async def start_async(self) -> None:
         await self.lifecycle.start()
+        self.application_control.catalog.load()
         self.started = self.db.health_details()["database_ready"] is True
 
     def stop(self) -> None:
@@ -115,8 +118,8 @@ class Runtime:
     def refresh_applications(self) -> list[ApplicationRecord]:
         return self.application_control.discover()
 
-    def list_applications(self) -> list[ApplicationRecord]:
-        return self.application_control.catalog.list()
+    def list_applications(self, include_non_user: bool = False) -> list[ApplicationRecord]:
+        return self.application_control.catalog.list(include_non_user=include_non_user)
 
     def resolve_application(self, name: str) -> ResolutionResult:
         return self.application_control.resolve(name)
@@ -127,12 +130,27 @@ class Runtime:
     def application_status(self, name: str) -> ApplicationOperationResult:
         return self.application_control.operate("status", name)
 
-    def list_application_windows(self, name: str) -> list[object]:
+    def list_application_windows(self, name: str) -> ApplicationWindowsResult:
         resolved = self.resolve_application(name)
-        return (
-            list(self.application_control.adapter.windows())
-            if resolved.selected_application
-            else []
+        if resolved.status != "RESOLVED" or resolved.selected_application is None:
+            return ApplicationWindowsResult(resolved.status, detail="application not found")
+        app = resolved.selected_application
+        names = {x.casefold() for x in app.process_names or (app.executable_name or "",)}
+        pids = {
+            p.pid
+            for p in self.application_control.adapter.processes()
+            if p.name.casefold() in names
+        }
+        if not pids:
+            return ApplicationWindowsResult(
+                ResolutionStatus.RESOLVED, app.application_id, detail="application not running"
+            )
+        windows = tuple(x for x in self.application_control.adapter.windows() if x.pid in pids)
+        return ApplicationWindowsResult(
+            ResolutionStatus.RESOLVED,
+            app.application_id,
+            windows,
+            "visible windows found" if windows else "application running with zero visible windows",
         )
 
     def focus_application(self, name: str) -> ApplicationOperationResult:

@@ -48,6 +48,81 @@ class VerificationState(StrEnum):
     UNSUPPORTED = "UNSUPPORTED"
 
 
+class ApplicationKind(StrEnum):
+    USER_APPLICATION = "USER_APPLICATION"
+    SYSTEM_COMPONENT = "SYSTEM_COMPONENT"
+    ADMINISTRATIVE_TOOL = "ADMINISTRATIVE_TOOL"
+    COMMAND_LINE_TOOL = "COMMAND_LINE_TOOL"
+    BACKGROUND_PROCESS = "BACKGROUND_PROCESS"
+    URI_HANDLER = "URI_HANDLER"
+    UNKNOWN = "UNKNOWN"
+
+
+_ADMINISTRATIVE = {
+    "takeown.exe",
+    "vssadmin.exe",
+    "wbadmin.exe",
+    "wusa.exe",
+    "winrs.exe",
+    "wsl.exe",
+    "wslconfig.exe",
+    "tpmvscmgr.exe",
+}
+_COMMAND_LINE = {
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "python.exe",
+    "pythonw.exe",
+    "node.exe",
+    "taskkill.exe",
+    "whoami.exe",
+    "systeminfo.exe",
+    "bash.exe",
+    "msbuild.exe",
+    "cl.exe",
+    "csc.exe",
+    "npm.cmd",
+}
+_SYSTEM_COMPONENTS = {"winlogon.exe", "wininit.exe", "userinit.exe"}
+_BACKGROUND = {"msmpeng.exe", "securityhealthservice.exe", "pangu.exe", "pangu-session-agent.exe"}
+_SERVICE_PROCESSES = {"wslservice.exe", "wlanext.exe", "svchost.exe", "services.exe"}
+
+
+def classify_application(
+    executable_name: str | None, install_source: str, uri_scheme: str | None = None
+) -> tuple[ApplicationKind, bool, bool, bool, bool, str | None]:
+    """Return a fail-closed classification for ordinary application control."""
+    name = (executable_name or "").casefold()
+    source = install_source.casefold()
+    if uri_scheme:
+        return ApplicationKind.URI_HANDLER, False, False, False, False, "URI handlers are not apps"
+    if name in _SYSTEM_COMPONENTS:
+        return ApplicationKind.SYSTEM_COMPONENT, False, False, False, True, "system component"
+    if name in _BACKGROUND:
+        return ApplicationKind.BACKGROUND_PROCESS, False, False, False, True, "background process"
+    if name in _SERVICE_PROCESSES or source in {"running_process", "visible_window"}:
+        return (
+            ApplicationKind.BACKGROUND_PROCESS,
+            False,
+            False,
+            False,
+            True,
+            "process-only evidence",
+        )
+    if name in _ADMINISTRATIVE:
+        return ApplicationKind.ADMINISTRATIVE_TOOL, False, False, True, True, "administrative tool"
+    if name in _COMMAND_LINE:
+        return ApplicationKind.COMMAND_LINE_TOOL, False, False, False, True, "command-line tool"
+    # A PATH-only record has no installation or shell identity proof.  Treat it
+    # as unknown until a stronger source corroborates it.
+    if install_source == "path":
+        return ApplicationKind.UNKNOWN, False, False, False, False, "PATH-only executable"
+    return ApplicationKind.USER_APPLICATION, True, True, False, False, None
+
+
 def normalise_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
 
@@ -59,7 +134,7 @@ def default_aliases(name: str) -> tuple[str, ...]:
     if key in {"code", "visual studio code"} or "visual studio code" in key:
         return ("VS Code", "Visual Studio Code", "Code")
     if key in {"notepad", "windows notepad"}:
-        return ("Notepad", "Windows Notepad")
+        return ("Notepad", "Windows Notepad", "notepad.exe")
     return ()
 
 
@@ -85,6 +160,12 @@ class ApplicationRecord:
     stale: bool = False
     source_evidence: tuple[dict[str, str], ...] = ()
     health_state: str = "HEALTHY"
+    application_kind: ApplicationKind = ApplicationKind.UNKNOWN
+    launch_eligible: bool = False
+    control_eligible: bool = False
+    requires_elevation: bool = False
+    protected: bool = False
+    exclusion_reason: str | None = None
 
     @staticmethod
     def create(name: str, **values: object) -> ApplicationRecord:
@@ -102,6 +183,22 @@ class ApplicationRecord:
         executable_name = cast(str | None, payload.pop("executable_name", None)) or (
             Path(str(executable_path)).name if executable_path else None
         )
+        kind, launchable, controllable, elevation, protected, exclusion = classify_application(
+            executable_name,
+            cast(str, payload.get("install_source", "unknown")),
+            cast(str | None, payload.get("uri_scheme")),
+        )
+        if re.search(
+            r"visual studio.*(?:native tools|cross tools).*command prompt", name, re.IGNORECASE
+        ):
+            kind, launchable, controllable, elevation, protected, exclusion = (
+                ApplicationKind.COMMAND_LINE_TOOL,
+                False,
+                False,
+                False,
+                True,
+                "developer command prompt",
+            )
         return ApplicationRecord(
             identifier,
             name,
@@ -127,6 +224,12 @@ class ApplicationRecord:
             source_evidence=tuple(
                 cast(tuple[dict[str, str], ...], payload.get("source_evidence", ()))
             ),
+            application_kind=cast(ApplicationKind, payload.get("application_kind", kind)),
+            launch_eligible=cast(bool, payload.get("launch_eligible", launchable)),
+            control_eligible=cast(bool, payload.get("control_eligible", controllable)),
+            requires_elevation=cast(bool, payload.get("requires_elevation", elevation)),
+            protected=cast(bool, payload.get("protected", protected)),
+            exclusion_reason=cast(str | None, payload.get("exclusion_reason", exclusion)),
         )
 
     def public(self) -> dict[str, object]:
@@ -137,12 +240,19 @@ class ApplicationRecord:
             "aliases": self.aliases,
             "executable_name": self.executable_name,
             "package_identity": self.package_identity,
+            "app_user_model_id": self.app_user_model_id,
             "install_source": self.install_source,
             "version": self.version,
             "process_names": self.process_names,
             "confidence": self.confidence,
             "stale": self.stale,
             "health_state": self.health_state,
+            "application_kind": self.application_kind,
+            "launch_eligible": self.launch_eligible,
+            "control_eligible": self.control_eligible,
+            "requires_elevation": self.requires_elevation,
+            "protected": self.protected,
+            "exclusion_reason": self.exclusion_reason,
         }
 
 
@@ -186,16 +296,9 @@ class WindowsApplicationAdapter(Protocol):
 class RealWindowsApplicationAdapter:
     """Windows-only boundary. Registry is read directly; shell invocation is absent."""
 
-    _blocked: ClassVar[set[str]] = {
-        "cmd.exe",
-        "powershell.exe",
-        "pwsh.exe",
-        "wscript.exe",
-        "cscript.exe",
-        "python.exe",
-        "pythonw.exe",
-        "bash.exe",
-    }
+    _blocked: ClassVar[set[str]] = (
+        _COMMAND_LINE | _ADMINISTRATIVE | _SYSTEM_COMPONENTS | _BACKGROUND
+    )
 
     def _supported(self) -> bool:
         return platform.system() == "Windows"
@@ -210,19 +313,23 @@ class RealWindowsApplicationAdapter:
         records.extend(self._path_apps())
         records.extend(self._appx_packages())
         records.extend(self._uri_schemes())
+        visible = {window.pid: window for window in self.windows()}
         for process in self.processes():
-            if process.name.casefold() not in self._blocked:
-                records.append(
-                    ApplicationRecord.create(
-                        Path(process.name).stem,
-                        executable_path=process.executable_path,
-                        executable_name=process.name,
-                        process_names=(process.name,),
-                        install_source="running_process",
-                        confidence=0.65,
-                        source_evidence=({"source": "running_process"},),
-                    )
+            window = visible.get(process.pid)
+            records.append(
+                ApplicationRecord.create(
+                    window.title or Path(process.name).stem if window else Path(process.name).stem,
+                    executable_path=process.executable_path,
+                    executable_name=process.name,
+                    process_names=(process.name,),
+                    window_classes=(window.class_name,) if window else (),
+                    install_source="visible_window" if window else "running_process",
+                    confidence=0.65,
+                    source_evidence=(
+                        {"source": "visible_window" if window else "running_process"},
+                    ),
                 )
+            )
         return records
 
     def _uninstall_entries(self) -> list[ApplicationRecord]:
@@ -358,11 +465,7 @@ class RealWindowsApplicationAdapter:
         names = {"notepad.exe", "chrome.exe", "code.exe"}
         for item in os.environ.get("PATH", "").split(os.pathsep):
             try:
-                names.update(
-                    path.name
-                    for path in Path(item).glob("*.exe")
-                    if path.name.casefold() not in self._blocked
-                )
+                names.update(path.name for path in Path(item).glob("*.exe"))
             except OSError:
                 continue
         return [
@@ -620,21 +723,76 @@ class ApplicationCatalog:
         self.db = database
         self.adapter = adapter
         self._records: dict[str, ApplicationRecord] = {}
+        self._hydrated = False
+        self._empty_refresh_attempted = False
+
+    def load(self) -> list[ApplicationRecord]:
+        """Hydrate durable catalog state for a newly-created runtime container."""
+        with self.db.transaction() as session:
+            persisted = ApplicationCatalogRepository(session).list()
+        self._records = {item.application_id: self._from_persisted(item) for item in persisted}
+        self._hydrated = True
+        return self.list(include_non_user=True)
+
+    def prepare_for_resolution(self) -> None:
+        if not self._hydrated:
+            self.load()
+        if not self._records and not self._empty_refresh_attempted:
+            self._empty_refresh_attempted = True
+            self.refresh()
+
+    @staticmethod
+    def _from_persisted(item: ApplicationCatalogRecord) -> ApplicationRecord:
+        body = item.body
+        return ApplicationRecord.create(
+            item.display_name,
+            executable_path=body.get("executable_path"),
+            executable_name=body.get("executable_name"),
+            launch_arguments=tuple(cast(list[str], body.get("launch_arguments", []))),
+            package_identity=body.get("package_identity"),
+            app_user_model_id=body.get("app_user_model_id"),
+            uri_scheme=body.get("uri_scheme"),
+            install_source=body.get("install_source", "unknown"),
+            version=body.get("version"),
+            process_names=tuple(cast(list[str], body.get("process_names", []))),
+            window_classes=tuple(cast(list[str], body.get("window_classes", []))),
+            aliases=tuple(cast(list[str], body.get("aliases", []))),
+            source_evidence=tuple(cast(list[dict[str, str]], body.get("source_evidence", []))),
+            health_state=body.get("health_state", "HEALTHY"),
+            application_kind=ApplicationKind(cast(str, body.get("application_kind", "UNKNOWN"))),
+            launch_eligible=body.get("launch_eligible", False),
+            control_eligible=body.get("control_eligible", False),
+            requires_elevation=body.get("requires_elevation", False),
+            protected=body.get("protected", False),
+            exclusion_reason=body.get("exclusion_reason"),
+            stale=item.stale,
+            confidence=0.5,
+        )
 
     def refresh(self) -> list[ApplicationRecord]:
         discovered = self.adapter.discover()
-        grouped: dict[str, list[ApplicationRecord]] = {}
+        self._hydrated = True
+        grouped: list[list[ApplicationRecord]] = []
         for record in discovered:
-            grouped.setdefault(
-                record.executable_name.casefold()
-                if record.executable_name
-                else record.normalized_name,
-                [],
-            ).append(record)
+            matches = [group for group in grouped if self._same_application(record, group[0])]
+            if matches:
+                matches[0].append(record)
+            else:
+                grouped.append([record])
         now = datetime.now(UTC)
         self._records = {}
-        for group in grouped.values():
-            first = group[0]
+        precedence = {
+            "start_menu": 0,
+            "appx": 1,
+            "registry_app_paths": 2,
+            "registry_uninstall": 3,
+            "visible_window": 4,
+            "running_process": 5,
+            "uri_scheme": 6,
+            "path": 7,
+        }
+        for group in grouped:
+            first = min(group, key=lambda item: precedence.get(item.install_source, 99))
             aliases = tuple(
                 sorted(
                     {x.display_name for x in group} | set().union(*(set(x.aliases) for x in group))
@@ -646,16 +804,61 @@ class ApplicationCatalog:
                 source_evidence=tuple(e for x in group for e in x.source_evidence),
                 last_seen_at=now,
                 confidence=max(x.confidence for x in group),
+                launch_eligible=any(x.launch_eligible for x in group),
+                control_eligible=any(x.control_eligible for x in group),
             )
             self._records[merged.application_id] = merged
         with self.db.transaction() as session:
             repo = ApplicationCatalogRepository(session)
             for record in self._records.values():
                 repo.upsert(ApplicationCatalogRecord.from_application(record))
-        return self.list()
+        return self.list(include_non_user=True)
 
-    def list(self) -> list[ApplicationRecord]:
-        return sorted(self._records.values(), key=lambda item: item.display_name)
+    @staticmethod
+    def _same_application(left: ApplicationRecord, right: ApplicationRecord) -> bool:
+        """Merge only on concrete identity, never on a name by itself."""
+        left_ids = {
+            x.casefold()
+            for x in (left.executable_path, left.app_user_model_id, left.package_identity)
+            if x
+        }
+        right_ids = {
+            x.casefold()
+            for x in (right.executable_path, right.app_user_model_id, right.package_identity)
+            if x
+        }
+        if left_ids & right_ids:
+            return True
+        if (
+            left.normalized_name == right.normalized_name
+            and left.normalized_name in {"notepad", "windows notepad"}
+            and {x.casefold() for x in (left.executable_name, right.executable_name) if x}
+            & {"notepad.exe"}
+            and any(
+                "microsoft.windowsnotepad" in x.casefold()
+                for x in (
+                    left.package_identity,
+                    right.package_identity,
+                    left.app_user_model_id,
+                    right.app_user_model_id,
+                )
+                if x
+            )
+        ):
+            return True
+        # An executable filename is useful only with a matching display identity.
+        return bool(
+            left.executable_name
+            and right.executable_name
+            and left.executable_name.casefold() == right.executable_name.casefold()
+            and left.normalized_name == right.normalized_name
+        )
+
+    def list(self, include_non_user: bool = False) -> list[ApplicationRecord]:
+        records: list[ApplicationRecord] = list(self._records.values())
+        if not include_non_user:
+            records = [x for x in records if x.application_kind == ApplicationKind.USER_APPLICATION]
+        return sorted(records, key=lambda item: item.display_name)
 
     def get(self, app_id: str) -> ApplicationRecord | None:
         return self._records.get(app_id)
@@ -680,12 +883,26 @@ class ResolutionResult:
     ambiguity_reason: str | None = None
     clarification_options: tuple[str, ...] = ()
 
+    def public(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "selected_application": (
+                self.selected_application.public() if self.selected_application else None
+            ),
+            "candidates": [item.public() for item in self.candidates],
+            "confidence": self.confidence,
+            "matched_evidence": self.matched_evidence,
+            "ambiguity_reason": self.ambiguity_reason,
+            "clarification_options": self.clarification_options,
+        }
+
 
 class ApplicationResolver:
     def __init__(self, catalog: ApplicationCatalog) -> None:
         self.catalog = catalog
 
     def resolve(self, query: str) -> ResolutionResult:
+        self.catalog.prepare_for_resolution()
         key = normalise_name(query)
         scored = []
         for app in self.catalog.list():
@@ -743,6 +960,14 @@ class ApplicationOperationResult:
     normalized_error: str | None = None
 
 
+@dataclass(frozen=True)
+class ApplicationWindowsResult:
+    status: ResolutionStatus
+    application_id: str | None = None
+    windows: tuple[WindowObservation, ...] = ()
+    detail: str = ""
+
+
 class ApplicationControlRuntime:
     def __init__(
         self,
@@ -792,6 +1017,21 @@ class ApplicationControlRuntime:
                 normalized_error=resolution.status,
             )
         app = resolution.selected_application
+        if operation in {"open", "focus", "close", "restart"} and (
+            not app.launch_eligible
+            or app.protected
+            or app.application_kind != ApplicationKind.USER_APPLICATION
+        ):
+            return ApplicationOperationResult(
+                operation,
+                name,
+                app.application_id,
+                operation,
+                "prohibited",
+                VerificationState.DENIED,
+                0,
+                normalized_error=app.exclusion_reason or "not launchable",
+            )
         scope = f"application.control:{operation}"
         protected = {
             "msmpeng.exe",
