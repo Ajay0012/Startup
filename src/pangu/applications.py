@@ -15,12 +15,14 @@ import platform
 import re
 import shutil
 import subprocess
+import time
+import uuid
 from ctypes import wintypes
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar, Protocol, cast
+from typing import Any, ClassVar, Protocol, cast
 
 from .approvals import ApprovalBinding, PersistentApprovalService
 from .database import DatabaseService
@@ -619,7 +621,79 @@ class RealWindowsApplicationAdapter:
             return AdapterResult(True, False, "launch failed")
 
     def activate(self, app: ApplicationRecord) -> AdapterResult:
-        return AdapterResult(self._supported(), False, "package activation unavailable")
+        if not self._supported():
+            return AdapterResult(False, False, "APPX_ACTIVATION_UNAVAILABLE")
+        app_id = app.app_user_model_id or ""
+        if not re.fullmatch(r"[A-Za-z0-9._-]+![A-Za-z0-9._-]+", app_id):
+            return AdapterResult(True, False, "APPX_ACTIVATION_UNAVAILABLE")
+        activated = self._activate_application_manager(app_id)
+        if activated is not None:
+            return activated
+        try:
+            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{app_id}"])
+            return AdapterResult(True, True)
+        except OSError:
+            return self._trusted_executable_fallback(app)
+
+    @staticmethod
+    def _guid(value: str) -> Any:
+        raw = uuid.UUID(value).bytes_le
+        return (ctypes.c_byte * 16).from_buffer_copy(raw)
+
+    def _activate_application_manager(self, app_id: str) -> AdapterResult | None:
+        """Use IApplicationActivationManager when the Windows COM server is available."""
+        try:
+            ole32 = ctypes.OleDLL("ole32")
+            initialized = ole32.CoInitializeEx(None, 2) in (0, 1)
+            manager = ctypes.c_void_p()
+            hr = ole32.CoCreateInstance(
+                ctypes.byref(self._guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")),
+                None,
+                4,
+                ctypes.byref(self._guid("2E941141-7F97-4756-BA1D-9DECDE894A3D")),
+                ctypes.byref(manager),
+            )
+            if hr < 0 or not manager.value:
+                return None
+            try:
+                vtable = ctypes.cast(
+                    manager, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))
+                ).contents
+                activate = ctypes.WINFUNCTYPE(
+                    ctypes.c_long,
+                    ctypes.c_void_p,
+                    ctypes.c_wchar_p,
+                    ctypes.c_wchar_p,
+                    ctypes.c_uint,
+                    ctypes.POINTER(ctypes.c_uint),
+                )(vtable[3])
+                pid = ctypes.c_uint()
+                result = activate(manager, app_id, None, 0, ctypes.byref(pid))
+                return AdapterResult(
+                    True,
+                    result >= 0,
+                    "APPX_ACTIVATION_FAILED" if result < 0 else None,
+                    pid.value or None,
+                )
+            finally:
+                release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtable[2])
+                release(manager)
+                if initialized:
+                    ole32.CoUninitialize()
+        except (OSError, AttributeError):
+            return None
+
+    def _trusted_executable_fallback(self, app: ApplicationRecord) -> AdapterResult:
+        if app.executable_path and app.install_source in {"start_menu", "registry_app_paths"}:
+            return self.launch(app)
+        if app.package_identity and "microsoft.windowsnotepad" in app.package_identity.casefold():
+            path = Path(os.environ.get("WINDIR", r"C:\\Windows")) / "System32" / "notepad.exe"
+            if path.is_file():
+                try:
+                    return AdapterResult(True, True, pid=subprocess.Popen([str(path)]).pid)
+                except OSError:
+                    pass
+        return AdapterResult(True, False, "EXECUTABLE_FALLBACK_FAILED")
 
     def window_action(self, handle: int, action: str) -> AdapterResult:
         if not self._supported():
@@ -684,7 +758,12 @@ class SimulatedWindowsApplicationAdapter:
     def launch(self, app: ApplicationRecord) -> AdapterResult:
         self._next_pid += 1
         pid = self._next_pid
-        name = app.executable_name or app.display_name + ".exe"
+        name = app.executable_name or (
+            "notepad.exe"
+            if app.package_identity
+            and "microsoft.windowsnotepad" in app.package_identity.casefold()
+            else app.display_name + ".exe"
+        )
         self._processes.append(ProcessObservation(pid, name, app.executable_path))
         self._windows.append(WindowObservation(pid, pid, app.display_name))
         return AdapterResult(True, True, pid=pid)
@@ -800,6 +879,9 @@ class ApplicationCatalog:
             )
             merged = replace(
                 first,
+                executable_path=next((x.executable_path for x in group if x.executable_path), None),
+                executable_name=next((x.executable_name for x in group if x.executable_name), None),
+                process_names=tuple(sorted(set().union(*(set(x.process_names) for x in group)))),
                 aliases=aliases,
                 source_evidence=tuple(e for x in group for e in x.source_evidence),
                 last_seen_at=now,
@@ -991,6 +1073,18 @@ class ApplicationControlRuntime:
     def discover(self) -> list[ApplicationRecord]:
         return self.catalog.refresh()
 
+    @staticmethod
+    def _process_names(app: ApplicationRecord) -> set[str]:
+        return {
+            normalise_name(item)
+            for item in (*app.process_names, app.executable_name or "", *app.aliases)
+            if item
+        }
+
+    def _matching_processes(self, app: ApplicationRecord) -> list[ProcessObservation]:
+        names = self._process_names(app)
+        return [p for p in self.adapter.processes() if normalise_name(p.name) in names]
+
     def operate(
         self, operation: str, name: str, approval_token: str | None = None, actor: str = "default"
     ) -> ApplicationOperationResult:
@@ -1058,12 +1152,7 @@ class ApplicationControlRuntime:
                 normalized_error="protected application",
             )
         if operation == "status":
-            processes = [
-                p
-                for p in self.adapter.processes()
-                if p.name.casefold()
-                in {x.casefold() for x in app.process_names or (app.executable_name or "",)}
-            ]
+            processes = self._matching_processes(app)
             return ApplicationOperationResult(
                 operation,
                 name,
@@ -1102,24 +1191,32 @@ class ApplicationControlRuntime:
         windows = [
             item
             for item in self.adapter.windows()
-            if item.pid
-            in {
-                p.pid
-                for p in self.adapter.processes()
-                if p.name.casefold()
-                in {x.casefold() for x in app.process_names or (app.executable_name or "",)}
-            }
+            if item.pid in {p.pid for p in self._matching_processes(app)}
         ]
         if operation == "open":
+            error: str | None
+            before_pids = {p.pid for p in self._matching_processes(app)}
             result = (
                 self.adapter.activate(app) if app.app_user_model_id else self.adapter.launch(app)
             )
-            observed = any(p.pid == result.pid for p in self.adapter.processes())
-            state = (
-                VerificationState.VERIFIED
-                if result.succeeded and observed
-                else VerificationState.FAILED
-            )
+            observed_process: ProcessObservation | None = None
+            observed_window: WindowObservation | None = None
+            deadline = time.monotonic() + 3.0
+            while result.succeeded and time.monotonic() < deadline:
+                new = [p for p in self._matching_processes(app) if p.pid not in before_pids]
+                if result.pid:
+                    new = [p for p in new if p.pid == result.pid] or new
+                visible = [w for w in self.adapter.windows() if w.pid in {p.pid for p in new}]
+                if new and visible:
+                    observed_process, observed_window = new[0], visible[0]
+                    break
+                time.sleep(0.05)
+            observed = observed_process is not None and observed_window is not None
+            state = VerificationState.VERIFIED if observed else VerificationState.FAILED
+            if not result.succeeded:
+                error = result.error or "APPX_ACTIVATION_FAILED"
+            else:
+                error = None if observed else "LAUNCH_POSTCONDITION_TIMEOUT"
         elif operation in {"focus", "minimize", "maximize", "restore"}:
             if not windows:
                 return ApplicationOperationResult(
@@ -1196,9 +1293,26 @@ class ApplicationControlRuntime:
             name,
             app.application_id,
             operation,
-            "observed" if observed else "not observed",
+            "running with visible window" if operation == "open" and observed else "not observed",
             state,
             resolution.confidence,
-            {"adapter_succeeded": result.succeeded, "pid": result.pid},
-            normalized_error=result.error,
+            {
+                "adapter_succeeded": result.succeeded,
+                "pid": observed_process.pid
+                if operation == "open" and observed_process
+                else result.pid,
+                "window_handle": observed_window.handle
+                if operation == "open" and observed_window
+                else None,
+                "window_title": observed_window.title
+                if operation == "open" and observed_window
+                else None,
+                "window_class": observed_window.class_name
+                if operation == "open" and observed_window
+                else None,
+                "observation_source": "process_and_visible_window"
+                if operation == "open" and observed
+                else None,
+            },
+            normalized_error=error if operation == "open" else result.error,
         )

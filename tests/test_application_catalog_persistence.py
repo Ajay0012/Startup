@@ -80,6 +80,27 @@ def test_semantic_application_exit_codes() -> None:
     assert _application_exit_code(denied) == 5
 
 
+def test_appx_activation_is_selected_and_requires_visible_postcondition(tmp_path: Path) -> None:
+    class RecordingAdapter(SimulatedWindowsApplicationAdapter):
+        activated = False
+
+        def activate(self, app: ApplicationRecord):
+            self.activated = True
+            return super().activate(app)
+
+    adapter = RecordingAdapter([notepad()])
+    container = RuntimeBuilder(tmp_path, adapter).build()
+    asyncio.run(container.runtime.start_async())
+    try:
+        container.runtime.discover_applications()
+        result = container.runtime.open_application("Notepad")
+        assert adapter.activated
+        assert result.verification_state == VerificationState.VERIFIED
+        assert result.observed_outcome == "running with visible window"
+    finally:
+        asyncio.run(container.runtime.stop_async())
+
+
 def container_result(status: ResolutionStatus):
     from pangu.applications import ResolutionResult
 
