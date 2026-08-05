@@ -21,6 +21,8 @@ packages = ["src/pangu"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+pythonpath = ["src", "."]
+addopts = "--basetemp=.pytest-work"
 
 [tool.ruff]
 line-length = 100

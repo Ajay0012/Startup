@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Compatibility facade for the single lifecycle-owned SQLAlchemy database."""
+
+from __future__ import annotations
 
 from pathlib import Path
 

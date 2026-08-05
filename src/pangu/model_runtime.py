@@ -86,7 +86,9 @@ class CloudContextSanitizer:
         for category, pattern in self._rules:
             sanitized, count = re.subn(
                 pattern,
-                lambda match: match.group(1) + "[REDACTED]" if match.lastindex else "[REDACTED]",
+                lambda match: str(match.group(1)) + "[REDACTED]"
+                if match.lastindex
+                else "[REDACTED]",
                 sanitized,
             )
             if count:
@@ -192,7 +194,9 @@ class ModelRouter:
 
 class CognitiveDecisionKind(StrEnum):
     DIRECT_TOOL = "DIRECT_TOOL"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
     CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
+    DEFERRED = "DEFERRED"
     UNSUPPORTED = "UNSUPPORTED"
     INFORMATIONAL_RESPONSE = "INFORMATIONAL_RESPONSE"
 
@@ -205,10 +209,31 @@ class CognitiveDecision:
 
 
 class CognitiveEngine:
-    def decide(self, normalized_intent: str) -> CognitiveDecision:
-        if normalized_intent in {"create_folder", "battery_status"}:
+    def decide(
+        self, normalized_intent: str, route: RoutingDecision | None = None, original_text: str = ""
+    ) -> CognitiveDecision:
+        if normalized_intent in {
+            "create_folder",
+            "battery_status",
+            "open_application",
+            "mute_volume",
+            "volume_down",
+        }:
             return CognitiveDecision(
                 CognitiveDecisionKind.DIRECT_TOOL, "deterministic command", normalized_intent
+            )
+        if normalized_intent == "delete":
+            return CognitiveDecision(
+                CognitiveDecisionKind.APPROVAL_REQUIRED, "Deletion requires approval."
+            )
+        if normalized_intent == "rename":
+            return CognitiveDecision(
+                CognitiveDecisionKind.CLARIFICATION_REQUIRED, "Specify the file to rename."
+            )
+        if route is not None and route.provider == "gemini":
+            return CognitiveDecision(
+                CognitiveDecisionKind.DEFERRED,
+                "Cloud reasoning is unavailable; no action was taken.",
             )
         return CognitiveDecision(
             CognitiveDecisionKind.UNSUPPORTED, "No verified local action selected."
