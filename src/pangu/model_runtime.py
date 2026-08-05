@@ -480,6 +480,8 @@ class GeminiProvider:
             code = ProviderErrorCode.NETWORK_UNAVAILABLE
             retryable = True
             health = ProviderHealth.OFFLINE
+        elif "model" in text or "notfound" in text or "not found" in text:
+            code = ProviderErrorCode.MODEL_UNAVAILABLE
         return ProviderError(
             code,
             "Gemini request failed.",
@@ -491,6 +493,49 @@ class GeminiProvider:
             health,
             type(exc).__name__,
         )
+
+    async def probe_async(self, timeout_seconds: float) -> ModelResult:
+        """Perform one context-free provider health request using the fast model.
+
+        This intentionally bypasses normal generation retries and mission budgets:
+        a health probe must make at most one request and must never contain user data.
+        """
+        model = self.models[ModelRole.FAST]
+        if not self._key:
+            return ModelResult(
+                None,
+                self.name,
+                model,
+                ProviderHealth.UNCONFIGURED,
+                ProviderErrorCode.PROVIDER_UNCONFIGURED,
+            )
+        if self.transport is None:
+            self._health = ProviderHealth.OFFLINE
+            return ModelResult(
+                None,
+                self.name,
+                model,
+                self._health,
+                ProviderErrorCode.NETWORK_UNAVAILABLE,
+            )
+        self.active_requests += 1
+        try:
+            await self.transport.health_check(model, timeout_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error = self._error(exc, model, None)
+            self.last_failure = error
+            self._health = error.health_impact
+            self.circuit.failure(error.error_code)
+            return ModelResult(None, self.name, model, self._health, error.error_code, error.retryable)
+        else:
+            self.circuit.success()
+            self._health = ProviderHealth.HEALTHY
+            self.last_success = time.time()
+            return ModelResult("OK", self.name, model, self._health)
+        finally:
+            self.active_requests -= 1
 
     async def generate_async(self, request: ModelRequest, structured: bool = False) -> ModelResult:
         model = self.models[request.role]
