@@ -121,7 +121,7 @@ class GoogleGenAITransport:
 
     def _client_or_create(self) -> Any:
         if self._client is None:
-            from google import genai  # type: ignore[import-untyped]
+            from google import genai
 
             self._client = genai.Client(api_key=self._api_key)
         return self._client
@@ -454,7 +454,7 @@ class GeminiProvider:
         }
 
     def _error(self, exc: Exception, model: str, trace_id: str | None) -> ProviderError:
-        text = type(exc).__name__.lower()
+        text = f"{type(exc).__name__} {exc}".lower()
         code = ProviderErrorCode.INTERNAL_PROVIDER_ERROR
         retryable = False
         health = ProviderHealth.FAILED
@@ -466,21 +466,28 @@ class GeminiProvider:
             code = ProviderErrorCode.REQUEST_TIMEOUT
             retryable = True
             health = ProviderHealth.OFFLINE
-        elif "auth" in text or "credential" in text or "permission" in text:
+        elif (
+            "auth" in text
+            or "credential" in text
+            or "permission" in text
+            or "api key" in text
+            or "401" in text
+            or "403" in text
+        ):
             code = ProviderErrorCode.INVALID_CREDENTIALS
             health = ProviderHealth.INVALID_CREDENTIALS
         elif "quota" in text:
             code = ProviderErrorCode.QUOTA_EXHAUSTED
             health = ProviderHealth.QUOTA_EXHAUSTED
-        elif "rate" in text or "429" in text:
+        elif "rate" in text or "429" in text or "resource exhausted" in text:
             code = ProviderErrorCode.RATE_LIMITED
             retryable = True
             health = ProviderHealth.RATE_LIMITED
-        elif "network" in text or "connect" in text:
+        elif "network" in text or "connect" in text or "dns" in text or "socket" in text:
             code = ProviderErrorCode.NETWORK_UNAVAILABLE
             retryable = True
             health = ProviderHealth.OFFLINE
-        elif "model" in text or "notfound" in text or "not found" in text:
+        elif "model" in text or "notfound" in text or "not found" in text or "404" in text:
             code = ProviderErrorCode.MODEL_UNAVAILABLE
         return ProviderError(
             code,
@@ -528,7 +535,9 @@ class GeminiProvider:
             self.last_failure = error
             self._health = error.health_impact
             self.circuit.failure(error.error_code)
-            return ModelResult(None, self.name, model, self._health, error.error_code, error.retryable)
+            return ModelResult(
+                None, self.name, model, self._health, error.error_code, error.retryable
+            )
         else:
             self.circuit.success()
             self._health = ProviderHealth.HEALTHY
