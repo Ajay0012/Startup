@@ -135,40 +135,46 @@ class Runtime:
         if resolved.status != "RESOLVED" or resolved.selected_application is None:
             return ApplicationWindowsResult(resolved.status, detail="application not found")
         app = resolved.selected_application
-        names = {x.casefold() for x in app.process_names or (app.executable_name or "",)}
-        pids = {
-            p.pid
-            for p in self.application_control.adapter.processes()
-            if p.name.casefold() in names
-        }
-        if not pids:
+        observed = self.application_control.observe(app)
+        if not observed.processes:
             return ApplicationWindowsResult(
                 ResolutionStatus.RESOLVED, app.application_id, detail="application not running"
             )
-        windows = tuple(x for x in self.application_control.adapter.windows() if x.pid in pids)
         return ApplicationWindowsResult(
             ResolutionStatus.RESOLVED,
             app.application_id,
-            windows,
-            "visible windows found" if windows else "application running with zero visible windows",
+            observed.windows,
+            "visible windows found"
+            if observed.windows
+            else "application running with zero visible windows",
         )
 
-    def focus_application(self, name: str) -> ApplicationOperationResult:
-        return self.application_control.operate("focus", name)
+    def focus_application(
+        self, name: str, window_handle: int | None = None
+    ) -> ApplicationOperationResult:
+        return self.application_control.operate("focus", name, window_handle=window_handle)
 
-    def minimize_application(self, name: str) -> ApplicationOperationResult:
-        return self.application_control.operate("minimize", name)
+    def minimize_application(
+        self, name: str, window_handle: int | None = None
+    ) -> ApplicationOperationResult:
+        return self.application_control.operate("minimize", name, window_handle=window_handle)
 
-    def maximize_application(self, name: str) -> ApplicationOperationResult:
-        return self.application_control.operate("maximize", name)
+    def maximize_application(
+        self, name: str, window_handle: int | None = None
+    ) -> ApplicationOperationResult:
+        return self.application_control.operate("maximize", name, window_handle=window_handle)
 
-    def restore_application(self, name: str) -> ApplicationOperationResult:
-        return self.application_control.operate("restore", name)
+    def restore_application(
+        self, name: str, window_handle: int | None = None
+    ) -> ApplicationOperationResult:
+        return self.application_control.operate("restore", name, window_handle=window_handle)
 
     def close_application(
-        self, name: str, approval_token: str | None = None
+        self, name: str, approval_token: str | None = None, window_handle: int | None = None
     ) -> ApplicationOperationResult:
-        return self.application_control.operate("close", name, approval_token)
+        return self.application_control.operate(
+            "close", name, approval_token, window_handle=window_handle
+        )
 
     def restart_application(
         self, name: str, approval_token: str | None = None

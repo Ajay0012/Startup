@@ -140,6 +140,18 @@ def default_aliases(name: str) -> tuple[str, ...]:
     return ()
 
 
+def _window_public(window: WindowObservation) -> dict[str, object]:
+    return {
+        "handle": window.handle,
+        "pid": window.pid,
+        "title": window.title,
+        "class_name": window.class_name,
+        "minimized": window.minimized,
+        "maximized": window.maximized,
+        "foreground": window.foreground,
+    }
+
+
 @dataclass(frozen=True)
 class ApplicationRecord:
     application_id: str
@@ -263,6 +275,7 @@ class ProcessObservation:
     pid: int
     name: str
     executable_path: str | None = None
+    created_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -550,23 +563,22 @@ class RealWindowsApplicationAdapter:
     def processes(self) -> list[ProcessObservation]:
         if not self._supported():
             return []
-        # tasklist has no untrusted input and keeps this dependency-free.
+        # psutil exposes the actual Process.pid and creation time; do not infer a
+        # PID from tasklist CSV field positions (the session id is not a PID).
         try:
-            text = subprocess.run(
-                ["tasklist", "/FO", "CSV", "/NH"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-                check=False,
-            ).stdout
+            import psutil  # type: ignore[import-untyped]
+
             return [
-                ProcessObservation(int(parts[-2].replace(",", "")), parts[0].strip('"'))
-                for line in text.splitlines()
-                if (parts := line.split('","'))
-                and len(parts) >= 2
-                and parts[-2].replace('"', "").replace(",", "").isdigit()
+                ProcessObservation(
+                    process.pid,
+                    process.info["name"] or "",
+                    process.info["exe"],
+                    process.info["create_time"],
+                )
+                for process in psutil.process_iter(["name", "exe", "create_time"])
+                if isinstance(process.pid, int) and process.pid > 0
             ]
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, ImportError):
             return []
 
     def windows(self) -> list[WindowObservation]:
@@ -1049,6 +1061,31 @@ class ApplicationWindowsResult:
     windows: tuple[WindowObservation, ...] = ()
     detail: str = ""
 
+    def public(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "application_id": self.application_id,
+            "windows": [
+                {
+                    "handle": item.handle,
+                    "pid": item.pid,
+                    "title": item.title,
+                    "class_name": item.class_name,
+                    "minimized": item.minimized,
+                    "maximized": item.maximized,
+                    "foreground": item.foreground,
+                }
+                for item in self.windows
+            ],
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
+class ApplicationObservation:
+    processes: tuple[ProcessObservation, ...] = ()
+    windows: tuple[WindowObservation, ...] = ()
+
 
 class ApplicationControlRuntime:
     def __init__(
@@ -1085,8 +1122,20 @@ class ApplicationControlRuntime:
         names = self._process_names(app)
         return [p for p in self.adapter.processes() if normalise_name(p.name) in names]
 
+    def observe(self, app: ApplicationRecord) -> ApplicationObservation:
+        processes = tuple(self._matching_processes(app))
+        pids = {process.pid for process in processes if process.pid > 0}
+        return ApplicationObservation(
+            processes, tuple(x for x in self.adapter.windows() if x.pid in pids)
+        )
+
     def operate(
-        self, operation: str, name: str, approval_token: str | None = None, actor: str = "default"
+        self,
+        operation: str,
+        name: str,
+        approval_token: str | None = None,
+        actor: str = "default",
+        window_handle: int | None = None,
     ) -> ApplicationOperationResult:
         resolution = self.resolve(name)
         # A stale executable is never launched. One bounded rediscovery may repair
@@ -1152,7 +1201,8 @@ class ApplicationControlRuntime:
                 normalized_error="protected application",
             )
         if operation == "status":
-            processes = self._matching_processes(app)
+            snapshot = self.observe(app)
+            processes = snapshot.processes
             return ApplicationOperationResult(
                 operation,
                 name,
@@ -1161,7 +1211,12 @@ class ApplicationControlRuntime:
                 "running" if processes else "not running",
                 VerificationState.VERIFIED,
                 resolution.confidence,
-                {"process_ids": [p.pid for p in processes]},
+                {
+                    "process_ids": [p.pid for p in processes],
+                    "visible_window_count": len(snapshot.windows),
+                    "window_owner_process_ids": sorted({item.pid for item in snapshot.windows}),
+                    "running_without_visible_windows": bool(processes and not snapshot.windows),
+                },
             )
         if operation == "terminate":
             binding = ApprovalBinding(
@@ -1188,36 +1243,75 @@ class ApplicationControlRuntime:
                     0,
                     normalized_error="exact approval required",
                 )
-        windows = [
-            item
-            for item in self.adapter.windows()
-            if item.pid in {p.pid for p in self._matching_processes(app)}
-        ]
+        windows = list(self.observe(app).windows)
+        if (
+            operation in {"focus", "minimize", "maximize", "restore", "close"}
+            and window_handle is not None
+        ):
+            selected = next((window for window in windows if window.handle == window_handle), None)
+            if selected is None:
+                return ApplicationOperationResult(
+                    operation,
+                    name,
+                    app.application_id,
+                    operation,
+                    "window not found",
+                    VerificationState.DENIED,
+                    0,
+                    normalized_error="window handle is stale or foreign",
+                )
+            windows = [selected]
         if operation == "open":
             error: str | None
-            before_pids = {p.pid for p in self._matching_processes(app)}
+            pre_launch = self.observe(app)
+            before_pids = {p.pid for p in pre_launch.processes}
+            before_handles = {window.handle for window in pre_launch.windows}
             result = (
                 self.adapter.activate(app) if app.app_user_model_id else self.adapter.launch(app)
             )
             observed_process: ProcessObservation | None = None
-            observed_window: WindowObservation | None = None
+            observed_window = None
             deadline = time.monotonic() + 3.0
             while result.succeeded and time.monotonic() < deadline:
-                new = [p for p in self._matching_processes(app) if p.pid not in before_pids]
+                current = self.observe(app)
+                new = [p for p in current.processes if p.pid not in before_pids]
                 if result.pid:
                     new = [p for p in new if p.pid == result.pid] or new
-                visible = [w for w in self.adapter.windows() if w.pid in {p.pid for p in new}]
+                new_windows = [w for w in current.windows if w.handle not in before_handles]
+                visible = [w for w in current.windows if w.pid in {p.pid for p in new}]
                 if new and visible:
                     observed_process, observed_window = new[0], visible[0]
                     break
+                # Single-instance AppX handoff: a broker/activation PID may
+                # delegate a new window to an existing trusted app process.
+                if new_windows:
+                    observed_window = new_windows[0]
+                    observed_process = next(
+                        (p for p in current.processes if p.pid == observed_window.pid), None
+                    )
+                if observed_process and observed_window:
+                    break
                 time.sleep(0.05)
             observed = observed_process is not None and observed_window is not None
-            state = VerificationState.VERIFIED if observed else VerificationState.FAILED
+            handoff = bool(observed and observed_process and observed_process.pid in before_pids)
+            state = VerificationState.VERIFIED if observed else VerificationState.UNVERIFIED
             if not result.succeeded:
                 error = result.error or "APPX_ACTIVATION_FAILED"
             else:
                 error = None if observed else "LAUNCH_POSTCONDITION_TIMEOUT"
         elif operation in {"focus", "minimize", "maximize", "restore"}:
+            if len(windows) > 1:
+                return ApplicationOperationResult(
+                    operation,
+                    name,
+                    app.application_id,
+                    operation,
+                    "ambiguous windows",
+                    VerificationState.DENIED,
+                    0,
+                    {"clarification_options": [_window_public(w) for w in windows]},
+                    normalized_error=ResolutionStatus.AMBIGUOUS,
+                )
             if not windows:
                 return ApplicationOperationResult(
                     operation,
@@ -1229,32 +1323,65 @@ class ApplicationControlRuntime:
                     0.4,
                     retryable=True,
                 )
-            result = self.adapter.window_action(windows[0].handle, operation)
-            observed_window = next(
-                (x for x in self.adapter.windows() if x.handle == windows[0].handle), None
-            )
+            target = windows[0]
+            result = self.adapter.window_action(target.handle, operation)
+            started = time.monotonic()
+            observed_window = None
+            while result.succeeded and time.monotonic() - started < 1.5:
+                observed_window = next(
+                    (x for x in self.observe(app).windows if x.handle == target.handle), None
+                )
+                ok = bool(
+                    observed_window
+                    and (
+                        (operation == "focus" and observed_window.foreground)
+                        or (operation == "minimize" and observed_window.minimized)
+                        or (operation == "maximize" and observed_window.maximized)
+                        or (operation == "restore" and not observed_window.minimized)
+                    )
+                )
+                if ok:
+                    break
+                time.sleep(0.05)
             ok = bool(
                 observed_window
                 and (
                     (operation == "focus" and observed_window.foreground)
                     or (operation == "minimize" and observed_window.minimized)
                     or (operation == "maximize" and observed_window.maximized)
-                    or (
-                        operation == "restore"
-                        and not observed_window.minimized
-                        and not observed_window.maximized
-                    )
+                    or (operation == "restore" and not observed_window.minimized)
                 )
             )
             state = (
                 VerificationState.VERIFIED
                 if result.succeeded and ok
-                else VerificationState.PARTIALLY_VERIFIED
-                if result.succeeded
-                else VerificationState.FAILED
+                else (
+                    VerificationState.UNVERIFIED if result.succeeded else VerificationState.FAILED
+                )
             )
             observed = ok
+            error = (
+                None
+                if ok
+                else (
+                    "FOREGROUND_RESTRICTED"
+                    if operation == "focus"
+                    else "WINDOW_STATE_POSTCONDITION_TIMEOUT"
+                )
+            )
         elif operation == "close":
+            if len(windows) > 1:
+                return ApplicationOperationResult(
+                    operation,
+                    name,
+                    app.application_id,
+                    operation,
+                    "ambiguous windows",
+                    VerificationState.DENIED,
+                    0,
+                    {"clarification_options": [_window_public(w) for w in windows]},
+                    normalized_error=ResolutionStatus.AMBIGUOUS,
+                )
             if not windows:
                 return ApplicationOperationResult(
                     operation,
@@ -1265,13 +1392,23 @@ class ApplicationControlRuntime:
                     VerificationState.UNVERIFIED,
                     0.5,
                 )
-            result = self.adapter.graceful_close(windows[0].handle)
-            observed = not any(x.handle == windows[0].handle for x in self.adapter.windows())
+            target = windows[0]
+            result = self.adapter.graceful_close(target.handle)
+            started = time.monotonic()
+            observed = False
+            while result.succeeded and time.monotonic() - started < 1.5:
+                observed = not any(x.handle == target.handle for x in self.observe(app).windows)
+                if observed:
+                    break
+                time.sleep(0.05)
             state = (
                 VerificationState.VERIFIED
                 if result.succeeded and observed
-                else VerificationState.FAILED
+                else (
+                    VerificationState.UNVERIFIED if result.succeeded else VerificationState.FAILED
+                )
             )
+            error = None if observed else "CLOSE_POSTCONDITION_TIMEOUT"
         elif operation == "restart":
             close = self.operate("close", name, approval_token, actor)
             if close.verification_state != VerificationState.VERIFIED:
@@ -1288,31 +1425,94 @@ class ApplicationControlRuntime:
                 0,
                 normalized_error="unknown operation",
             )
+        observed_outcomes = {
+            "focus": "selected window focused",
+            "minimize": "selected window minimized",
+            "restore": "selected window restored",
+            "maximize": "selected window maximized",
+            "close": "selected window closed",
+            "open": "running with visible window",
+        }
+        evidence: dict[str, object] = {
+            "adapter_succeeded": result.succeeded,
+            "pid": observed_process.pid if operation == "open" and observed_process else result.pid,
+            "process_creation_time": observed_process.created_at
+            if operation == "open" and observed_process
+            else None,
+            "window_handle": observed_window.handle
+            if operation == "open" and observed_window
+            else None,
+            "window_title": observed_window.title
+            if operation == "open" and observed_window
+            else None,
+            "window_class": observed_window.class_name
+            if operation == "open" and observed_window
+            else None,
+            "observation_source": "process_and_visible_window"
+            if operation == "open" and observed
+            else None,
+            "activation_method": "app_user_model_id" if app.app_user_model_id else "executable",
+            "activation_pid": result.pid if operation == "open" else None,
+            "preexisting_process": observed_process.pid in before_pids
+            if operation == "open" and observed_process
+            else False,
+            "new_window_handle": observed_window.handle
+            if operation == "open" and observed_window
+            else None,
+            "handoff_detected": handoff if operation == "open" else False,
+            "selected_window_handle": target.handle
+            if operation in {"focus", "minimize", "restore", "maximize", "close"}
+            else None,
+            "owner_pid": target.pid
+            if operation in {"focus", "minimize", "restore", "maximize", "close"}
+            else None,
+            "title": target.title
+            if operation in {"focus", "minimize", "restore", "maximize", "close"}
+            else None,
+            "class_name": target.class_name
+            if operation in {"focus", "minimize", "restore", "maximize", "close"}
+            else None,
+            "previous_state": _window_public(target)
+            if operation in {"focus", "minimize", "restore", "maximize", "close"}
+            else None,
+            "observed_state": _window_public(observed_window)
+            if operation in {"focus", "minimize", "restore", "maximize"} and observed_window
+            else {"exists": False}
+            if operation == "close" and observed
+            else None,
+            "verification_source": "shared_application_observation"
+            if operation != "open"
+            else None,
+        }
+        if operation != "open":
+            for key in (
+                "activation_method",
+                "activation_pid",
+                "new_window_handle",
+                "handoff_detected",
+                "preexisting_process",
+                "pid",
+                "process_creation_time",
+                "window_handle",
+                "window_title",
+                "window_class",
+                "observation_source",
+            ):
+                evidence.pop(key)
         return ApplicationOperationResult(
             operation,
             name,
             app.application_id,
             operation,
-            "running with visible window" if operation == "open" and observed else "not observed",
+            observed_outcomes[operation] if observed else "not observed",
             state,
             resolution.confidence,
-            {
-                "adapter_succeeded": result.succeeded,
-                "pid": observed_process.pid
-                if operation == "open" and observed_process
-                else result.pid,
-                "window_handle": observed_window.handle
-                if operation == "open" and observed_window
-                else None,
-                "window_title": observed_window.title
-                if operation == "open" and observed_window
-                else None,
-                "window_class": observed_window.class_name
-                if operation == "open" and observed_window
-                else None,
-                "observation_source": "process_and_visible_window"
-                if operation == "open" and observed
-                else None,
-            },
-            normalized_error=error if operation == "open" else result.error,
+            evidence,
+            retryable=(operation in {"open", "focus", "minimize", "restore", "maximize"})
+            and result.succeeded
+            and not observed,
+            normalized_error=error
+            if operation in {"open", "focus", "minimize", "restore", "maximize", "close"}
+            and not observed
+            else result.error,
         )

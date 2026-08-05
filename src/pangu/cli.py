@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--all", action="store_true", dest="include_all")
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument(
+        "--window-handle",
+        type=int,
+        help="target a specific visible application window (positive HWND)",
+    )
+    parser.add_argument(
         "--probe",
         action="store_true",
         help="perform one context-free live Gemini health request",
@@ -92,6 +97,14 @@ async def run_command(args: argparse.Namespace) -> int:
         elif args.command == "apps":
             action = args.text or "list"
             name = args.apps_action
+            if args.window_handle is not None and (
+                args.window_handle <= 0
+                or action not in {"focus", "minimize", "restore", "maximize", "close"}
+            ):
+                parser = argparse.ArgumentParser(prog="pangu apps")
+                parser.error(
+                    "--window-handle requires a positive value and a window control action"
+                )
             before = {item.application_id for item in runtime.list_applications(True)}
             actions = {
                 "discover": runtime.discover_applications,
@@ -101,11 +114,13 @@ async def run_command(args: argparse.Namespace) -> int:
                 "status": lambda: runtime.application_status(name or ""),
                 "windows": lambda: runtime.list_application_windows(name or ""),
                 "open": lambda: runtime.open_application(name or ""),
-                "focus": lambda: runtime.focus_application(name or ""),
-                "minimize": lambda: runtime.minimize_application(name or ""),
-                "maximize": lambda: runtime.maximize_application(name or ""),
-                "restore": lambda: runtime.restore_application(name or ""),
-                "close": lambda: runtime.close_application(name or ""),
+                "focus": lambda: runtime.focus_application(name or "", args.window_handle),
+                "minimize": lambda: runtime.minimize_application(name or "", args.window_handle),
+                "maximize": lambda: runtime.maximize_application(name or "", args.window_handle),
+                "restore": lambda: runtime.restore_application(name or "", args.window_handle),
+                "close": lambda: runtime.close_application(
+                    name or "", window_handle=args.window_handle
+                ),
                 "restart": lambda: runtime.restart_application(name or ""),
             }
             value = actions[action]()  # type: ignore[no-untyped-call]
