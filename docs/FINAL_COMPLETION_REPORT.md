@@ -35,3 +35,6 @@ The required full PANGU specification is substantially broader than this initial
 ## Persistence lifecycle continuation
 
 Alembic head remains `0002_persistent_exact_approval`. The database has a single engine creation site in `DatabaseService`; the legacy `persistence.Database` remains a thin delegating facade. API health now includes structured, non-path-bearing database state and readiness fails closed when the database is unavailable.
+# Model reliability completion
+
+The provider layer is implemented with injected transport and deterministic test coverage. No statement of successful real Gemini connectivity is made because this environment did not use a real credential.

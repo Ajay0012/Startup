@@ -14,3 +14,6 @@ All unlisted specification requirements are `NOT_STARTED` or `BLOCKED_ENVIRONMEN
 ## Database lifecycle continuation — 2026-08-05
 
 `DatabaseService` remains the sole production engine owner. Startup admits transactions only after migrations have run and session infrastructure exists; shutdown disables new transaction admission and disposes the engine. The FastAPI host exposes `/health` with sanitized database lifecycle data and `/ready`, which returns HTTP 503 until the database is ready.
+# Model provider traceability
+
+`src/pangu/model_runtime.py` implements the Gemini transport boundary, normalized failures, reliability controls, capability registry, and router. `tests/test_gemini_provider.py` covers fake transport success, unconfigured operation, retries, circuit transitions, budgets, repair, and cancellation.

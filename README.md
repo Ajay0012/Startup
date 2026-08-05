@@ -11,3 +11,5 @@ py -3.12 -m pangu.cli "create folder reports"
 ```
 
 The runtime is intentionally useful without Gemini. Add `GEMINI_API_KEY` to the local `.env` to enable the isolated provider when its optional package is installed.
+
+Gemini requests are isolated behind an injectable transport with bounded retries, circuit breaking, mission budgets, sanitization, and typed structured-output validation. `pangu models`, `pangu model-health`, and `pangu route "<text>"` expose only sanitized provider state.

@@ -10,3 +10,6 @@
 ## Database lifecycle validation
 
 Run `GET /health` to inspect only sanitized database state. `GET /ready` returns 200 only after the lifecycle startup has migrated and admitted database work; it returns 503 otherwise. Run `python -m pytest -q -p no:cacheprovider` with a writable temporary directory.
+# Gemini manual validation
+
+With a valid local `GEMINI_API_KEY`, run `pangu model-health`, then `pangu route "research a topic"`. Confirm that health output never contains a key or prompt. Do not treat an unconfigured provider as a failed deterministic runtime.

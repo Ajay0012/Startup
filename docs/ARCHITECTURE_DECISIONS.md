@@ -8,3 +8,6 @@
 ## Persistence continuation
 
 The authoritative local persistence boundary is `DatabaseService`; compatibility `persistence.Database` delegates to it and owns no connection, engine, or schema. Revision `0002_persistent_exact_approval` adds the fields needed to bind approvals to actor, tool/version, operation, canonical arguments, target, risk, scopes, mission/session, expiry, and approval mode. Exact-operation hashes are SHA-256 of canonical JSON.
+# ADR: Gemini is an injected transport
+
+Only `GoogleGenAITransport` imports the official SDK, and it imports it lazily. RuntimeBuilder owns provider construction; API and CLI only consume the shared container.

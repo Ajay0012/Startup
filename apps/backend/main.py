@@ -43,7 +43,15 @@ def create_app(container: ServiceContainer) -> FastAPI:
     def model_health() -> dict[str, object]:
         return {
             "deterministic": container.deterministic_provider.health(),
-            "gemini": container.gemini_provider.health(),
+            "gemini": container.gemini_provider.health_details(),
+        }
+
+    @app.get("/api/v1/models")
+    def models() -> dict[str, object]:
+        return {
+            "capabilities": [
+                capability.__dict__ for capability in container.model_capabilities.all()
+            ]
         }
 
     @app.post("/api/v1/language/normalize")
@@ -65,7 +73,9 @@ def create_app(container: ServiceContainer) -> FastAPI:
     def route(payload: dict[str, str]) -> dict[str, object]:
         intent = runtime.language.normalize(payload.get("text", ""))
         value = container.model_router.route(
-            intent.canonical_english, intent.intent_name != "informational"
+            intent.canonical_english,
+            intent.intent_name != "informational",
+            payload.get("kind", "text"),
         )
         return value.__dict__
 

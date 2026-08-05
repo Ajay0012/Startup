@@ -10,7 +10,8 @@ from .runtime_builder import RuntimeBuilder
 def main() -> None:
     parser = argparse.ArgumentParser(prog="pangu")
     parser.add_argument(
-        "command", choices=("health", "model-health", "normalize", "sanitize", "route", "decide")
+        "command",
+        choices=("health", "models", "model-health", "normalize", "sanitize", "route", "decide"),
     )
     parser.add_argument("text", nargs="?")
     args = parser.parse_args()
@@ -21,10 +22,14 @@ def main() -> None:
         text = args.text or ""
         if args.command == "health":
             result: object = runtime.db.health_details()
+        elif args.command == "models":
+            result = {
+                "capabilities": [item.__dict__ for item in container.model_capabilities.all()]
+            }
         elif args.command == "model-health":
             result = {
                 "deterministic": container.deterministic_provider.health(),
-                "gemini": container.gemini_provider.health(),
+                "gemini": container.gemini_provider.health_details(),
             }
         elif args.command == "normalize":
             result = runtime.language.normalize(text).__dict__

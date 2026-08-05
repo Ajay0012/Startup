@@ -17,8 +17,13 @@ from .model_runtime import (
     ContextAssembler,
     DeterministicProvider,
     GeminiProvider,
+    GoogleGenAITransport,
+    ModelCapability,
+    ModelCapabilityRegistry,
     ModelBudget,
+    ModelRole,
     ModelRouter,
+    RetryPolicy,
 )
 from .settings import PanguSettings
 
@@ -43,6 +48,7 @@ class ServiceContainer:
     cognitive_engine: CognitiveEngine
     language: LanguageRuntime
     context: ContextAssembler
+    model_capabilities: ModelCapabilityRegistry
     runtime: Runtime = field(init=False)
 
 
@@ -57,10 +63,32 @@ class RuntimeBuilder:
         database = DatabaseService(self._root / "runtime-data" / "database" / "pangu.db")
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
+        api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
+        models = {
+            ModelRole.FAST: settings.gemini_fast_model,
+            ModelRole.PRIMARY: settings.gemini_primary_model,
+            ModelRole.CODING: settings.gemini_coding_model,
+            ModelRole.VISION: settings.gemini_vision_model,
+        }
         gemini = GeminiProvider(
-            settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None,
-            settings.gemini_primary_model,
+            api_key,
+            transport=GoogleGenAITransport(api_key) if api_key else None,
+            models=models,
+            circuit_breaker=CircuitBreaker(),
+            retry_policy=RetryPolicy(settings.gemini_max_retries),
+            budget_manager=ModelBudget(
+                settings.gemini_max_model_calls_per_mission,
+                settings.gemini_max_input_tokens_per_mission,
+                settings.gemini_max_output_tokens_per_mission,
+            ),
+            sanitizer=sanitizer,
         )
+        capabilities = ModelCapabilityRegistry()
+        capabilities.register(ModelCapability("deterministic", "local-rules", ModelRole.FAST))
+        for role, model in models.items():
+            capabilities.register(
+                ModelCapability("gemini", model, role, vision=role == ModelRole.VISION)
+            )
         catalog = CapabilityCatalog()
         catalog.register(
             ToolSpecification(
@@ -84,18 +112,15 @@ class RuntimeBuilder:
             EventBus(),
             catalog,
             sanitizer,
-            CircuitBreaker(),
-            ModelBudget(
-                settings.gemini_max_model_calls_per_mission,
-                settings.gemini_max_input_tokens_per_mission,
-                settings.gemini_max_output_tokens_per_mission,
-            ),
+            gemini.circuit,
+            gemini.budget,
             deterministic,
             gemini,
             ModelRouter(deterministic, gemini, sanitizer),
             CognitiveEngine(),
             LanguageRuntime(),
             ContextAssembler(),
+            capabilities,
         )
         from .runtime import Runtime
 
