@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .capabilities import CapabilityCatalog, ToolSpecification
@@ -25,7 +25,7 @@ from .model_runtime import (
     ModelRouter,
     RetryPolicy,
 )
-from .settings import PanguSettings
+from .settings import PanguSettings, resolve_application_root
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -55,8 +55,8 @@ class ServiceContainer:
 class RuntimeBuilder:
     """The sole composition root; constructors perform no startup work."""
 
-    def __init__(self, root: Path) -> None:
-        self._root = root
+    def __init__(self, root: Path | None = None) -> None:
+        self._root = root.resolve() if root is not None else resolve_application_root()
 
     def build(self) -> ServiceContainer:
         settings = PanguSettings.load_root(self._root)

@@ -1,10 +1,36 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def resolve_application_root(start: Path | None = None) -> Path:
+    """Find the editable repository root without relying on the current directory."""
+    location = (start or Path(__file__)).resolve()
+    current = location if location.is_dir() else location.parent
+    for candidate in (current, *current.parents):
+        if (
+            (candidate / "pyproject.toml").is_file()
+            and (candidate / "src").is_dir()
+            and (candidate / ".env").exists()
+        ):
+            return candidate
+    return current
+
+
+def _valid_api_key(value: str | SecretStr | None) -> str | None:
+    raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+    if raw is None:
+        return None
+    candidate = raw.strip()
+    placeholders = {"changeme", "example", "placeholder", "your_api_key", "none", "null"}
+    if len(candidate) < 20 or candidate.lower() in placeholders:
+        return None
+    return candidate
 
 
 class PanguSettings(BaseSettings):
@@ -27,6 +53,11 @@ class PanguSettings(BaseSettings):
     pangu_allow_screenshot_upload: bool = False
     pangu_allow_document_upload: bool = False
     pangu_redact_sensitive_data: bool = True
+
+    @field_validator("gemini_api_key", mode="before")
+    @classmethod
+    def configured_key(cls, value: str | SecretStr | None) -> str | None:
+        return _valid_api_key(value)
 
     @field_validator("pangu_ai_provider")
     @classmethod
@@ -51,11 +82,21 @@ class PanguSettings(BaseSettings):
 
     @classmethod
     def load_root(cls, root: Path) -> PanguSettings:
-        values: dict[str, str] = {}
-        env_path = root / ".env"
+        """Load root .env values, overridden by explicitly-set process variables."""
+        values: dict[str, Any] = {}
+        env_path = root.resolve() / ".env"
+        field_names = {name.upper(): name for name in cls.model_fields}
         if env_path.exists():
             for line in env_path.read_text(encoding="utf-8").splitlines():
                 if "=" in line and not line.lstrip().startswith("#"):
-                    key, value = line.split("=", 1)
-                    values[key] = value
-        return cls(**dict[str, Any](values))
+                    key, env_value = line.split("=", 1)
+                    field_name = field_names.get(key.strip())
+                    if field_name is not None:
+                        values[field_name] = env_value.strip()
+        for name in cls.model_fields:
+            process_value = os.environ.get(name.upper())
+            if process_value is not None:
+                if name == "gemini_api_key" and _valid_api_key(process_value) is None:
+                    continue
+                values[name] = process_value
+        return cls(**values)

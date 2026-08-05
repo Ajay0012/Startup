@@ -729,7 +729,7 @@ class StructuredOutputValidator:
         text = match.group(1) if match else text
         value = json.loads(text)
         if not isinstance(value, dict):
-            raise ValueError("STRUCTURED_OUTPUT_INVALID")
+            raise TypeError("STRUCTURED_OUTPUT_INVALID")
         return value
 
     def validate(self, raw: str, required_keys: set[str] | type[T]) -> dict[str, object] | T:

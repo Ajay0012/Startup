@@ -24,8 +24,10 @@ class StubBuilder:
         return self.container
 
 
-def configured_container(tmp_path: Path) -> ServiceContainer:
-    (tmp_path / ".env").write_text("GEMINI_API_KEY=cli-test-secret\n", encoding="utf-8")
+def configured_container(tmp_path: Path, monkeypatch: MonkeyPatch) -> ServiceContainer:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    fake_key = "AIza" + "A" * 35
+    (tmp_path / ".env").write_text(f"GEMINI_API_KEY={fake_key}\n", encoding="utf-8")
     return RuntimeBuilder(tmp_path).build()
 
 
@@ -66,7 +68,7 @@ def test_python_module_help_and_model_health() -> None:
 def test_model_health_without_probe_makes_no_transport_request(
     monkeypatch: MonkeyPatch, capsys: object, tmp_path: Path
 ) -> None:
-    container = configured_container(tmp_path)
+    container = configured_container(tmp_path, monkeypatch)
     transport = FakeGeminiTransport()
     container.gemini_provider.transport = transport
     code, output = invoke(monkeypatch, capsys, container, "model-health")
@@ -78,7 +80,7 @@ def test_model_health_without_probe_makes_no_transport_request(
 def test_successful_probe_is_healthy_and_shuts_down(
     monkeypatch: MonkeyPatch, capsys: object, tmp_path: Path
 ) -> None:
-    container = configured_container(tmp_path)
+    container = configured_container(tmp_path, monkeypatch)
 
     class TrackingTransport(FakeGeminiTransport):
         def __init__(self) -> None:
@@ -103,7 +105,7 @@ def test_successful_probe_is_healthy_and_shuts_down(
 def test_invalid_key_probe_is_normalized_and_keeps_key_private(
     monkeypatch: MonkeyPatch, capsys: object, tmp_path: Path
 ) -> None:
-    container = configured_container(tmp_path)
+    container = configured_container(tmp_path, monkeypatch)
     transport = FakeGeminiTransport(failures=[PermissionError()])
     container.gemini_provider.transport = transport
     code, output = invoke(monkeypatch, capsys, container, "model-health", "--probe")
@@ -111,13 +113,13 @@ def test_invalid_key_probe_is_normalized_and_keeps_key_private(
     gemini = output["gemini"]  # type: ignore[index]
     assert gemini["state"] == ProviderHealth.INVALID_CREDENTIALS  # type: ignore[index]
     assert gemini["last_failure"] == ProviderErrorCode.INVALID_CREDENTIALS  # type: ignore[index]
-    assert "cli-test-secret" not in json.dumps(output)
+    assert "AIza" + "A" * 35 not in json.dumps(output)
 
 
 def test_timeout_probe_is_normalized(
     monkeypatch: MonkeyPatch, capsys: object, tmp_path: Path
 ) -> None:
-    container = configured_container(tmp_path)
+    container = configured_container(tmp_path, monkeypatch)
     transport = FakeGeminiTransport(failures=[TimeoutError()])
     container.gemini_provider.transport = transport
     code, output = invoke(monkeypatch, capsys, container, "model-health", "--probe")

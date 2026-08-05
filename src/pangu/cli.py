@@ -3,9 +3,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from pathlib import Path
-
 from .runtime_builder import RuntimeBuilder
+from .settings import resolve_application_root
 
 
 def main() -> int:
@@ -23,7 +22,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.probe and args.command != "model-health":
         parser.error("--probe is only supported with model-health")
-    container = RuntimeBuilder(Path.cwd()).build()
+    container = RuntimeBuilder(resolve_application_root()).build()
     runtime = container.runtime
     runtime.start()
     exit_code = 0
