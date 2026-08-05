@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .database import (
+    ApplicationCatalogRow,
     ApprovalConsumptionRow,
     ApprovalRevocationRow,
     ApprovalRow,
@@ -120,6 +121,34 @@ class RuntimeHealthRecord:
     component: str | None
     status: str
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class ApplicationCatalogRecord:
+    application_id: str
+    display_name: str
+    normalized_name: str
+    body: dict[str, object]
+    stale: bool
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+    @classmethod
+    def from_application(cls, application: Any) -> ApplicationCatalogRecord:
+        return cls(
+            application.application_id,
+            application.display_name,
+            application.normalized_name,
+            {
+                "aliases": list(application.aliases),
+                "executable_name": application.executable_name,
+                "install_source": application.install_source,
+                "source_evidence": list(application.source_evidence),
+            },
+            application.stale,
+            application.discovered_at,
+            application.last_seen_at,
+        )
 
 
 @dataclass(frozen=True)
@@ -237,6 +266,23 @@ class RuntimeHealthRepository(_Repository):
             RuntimeHealthRow(component=r.component, status=r.status, updated_at=r.updated_at)
         )
         return RuntimeHealthRecord(x.id, x.component, x.status, x.updated_at)
+
+
+class ApplicationCatalogRepository(_Repository):
+    def upsert(self, r: ApplicationCatalogRecord) -> ApplicationCatalogRecord:
+        row = self._session.get(ApplicationCatalogRow, r.application_id)
+        if row is None:
+            self._add(ApplicationCatalogRow(**r.__dict__))
+        else:
+            row.display_name, row.normalized_name, row.body, row.stale, row.last_seen_at = (
+                r.display_name,
+                r.normalized_name,
+                r.body,
+                r.stale,
+                r.last_seen_at,
+            )
+            self._session.flush()
+        return r
 
 
 class MissionRepository(_Repository):

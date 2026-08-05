@@ -74,6 +74,44 @@ class RuntimeHealthRow(Base):
     )
 
 
+class ApplicationCatalogRow(Base):
+    __tablename__ = "applications"
+    application_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(512), index=True, nullable=False)
+    body: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    stale: Mapped[bool] = mapped_column(default=False, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ApplicationAliasRow(Base):
+    __tablename__ = "application_aliases"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("applications.application_id"), index=True
+    )
+    alias: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+
+
+class ApplicationEvidenceRow(Base):
+    __tablename__ = "application_evidence"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("applications.application_id"), index=True
+    )
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    evidence: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+
+
+class ApplicationDiscoveryRunRow(Base):
+    __tablename__ = "application_discovery_runs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DatabaseService:
     """The single SQLAlchemy engine/session owner for PANGU local state."""
 
@@ -139,7 +177,7 @@ class DatabaseService:
                 "lifecycle_state": self.lifecycle_state,
                 "database_ready": False,
                 "migration_revision": None,
-                "migration_head": "0002_persistent_exact_approval",
+                "migration_head": "0003_application_catalog",
                 "migration_at_head": False,
                 "journal_mode": None,
                 "foreign_keys_enabled": False,
@@ -155,7 +193,7 @@ class DatabaseService:
             mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
             foreign_keys = connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
             busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
-        at_head = revision == "0002_persistent_exact_approval"
+        at_head = revision == "0003_application_catalog"
         ready = bool(
             at_head
             and str(mode).lower() == "wal"
@@ -168,7 +206,7 @@ class DatabaseService:
             "lifecycle_state": self.lifecycle_state,
             "database_ready": ready,
             "migration_revision": revision,
-            "migration_head": "0002_persistent_exact_approval",
+            "migration_head": "0003_application_catalog",
             "migration_at_head": at_head,
             "journal_mode": str(mode),
             "foreign_keys_enabled": foreign_keys == 1,

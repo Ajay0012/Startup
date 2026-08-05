@@ -12,9 +12,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="pangu")
     parser.add_argument(
         "command",
-        choices=("health", "models", "model-health", "normalize", "sanitize", "route", "decide"),
+        choices=(
+            "health",
+            "models",
+            "model-health",
+            "normalize",
+            "sanitize",
+            "route",
+            "decide",
+            "apps",
+        ),
     )
     parser.add_argument("text", nargs="?")
+    parser.add_argument("apps_action", nargs="?")
     parser.add_argument(
         "--probe",
         action="store_true",
@@ -64,6 +74,30 @@ async def run_command(args: argparse.Namespace) -> int:
             result = container.model_router.route(
                 intent.canonical_english, intent.intent_name != "informational"
             ).__dict__
+        elif args.command == "apps":
+            action = args.text or "list"
+            name = args.apps_action
+            actions = {
+                "discover": runtime.discover_applications,
+                "refresh": runtime.refresh_applications,
+                "list": runtime.list_applications,
+                "resolve": lambda: runtime.resolve_application(name or ""),
+                "status": lambda: runtime.application_status(name or ""),
+                "windows": lambda: runtime.list_application_windows(name or ""),
+                "open": lambda: runtime.open_application(name or ""),
+                "focus": lambda: runtime.focus_application(name or ""),
+                "minimize": lambda: runtime.minimize_application(name or ""),
+                "maximize": lambda: runtime.maximize_application(name or ""),
+                "restore": lambda: runtime.restore_application(name or ""),
+                "close": lambda: runtime.close_application(name or ""),
+                "restart": lambda: runtime.restart_application(name or ""),
+            }
+            value = actions[action]()  # type: ignore[no-untyped-call]
+            result = (
+                [item.public() if hasattr(item, "public") else item.__dict__ for item in value]
+                if isinstance(value, list)
+                else value.__dict__
+            )
         else:
             result = runtime.decide(text).__dict__
         print(json.dumps(result, default=str))

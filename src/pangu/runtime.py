@@ -3,6 +3,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from .applications import (
+    ApplicationControlRuntime,
+    ApplicationOperationResult,
+    ApplicationRecord,
+    ResolutionResult,
+)
 from .capabilities import CapabilityCatalog
 from .contracts import CommandEnvelope, Status, ToolRequest, ToolResult
 from .database import DatabaseService
@@ -30,6 +36,7 @@ class Runtime:
         context: ContextAssembler,
         model_router: ModelRouter,
         cognitive_engine: CognitiveEngine,
+        application_control: ApplicationControlRuntime,
     ) -> None:
         self.root, self.settings = root, settings
         self.db, self.lifecycle, self.events, self.catalog = database, lifecycle, events, catalog
@@ -40,6 +47,7 @@ class Runtime:
             cognitive_engine,
         )
         self.safety = SafetyGateway()
+        self.application_control = application_control
         grants = PermissionStore((PermissionGrant("filesystem.write:*", "default"),))
         self.approvals = ApprovalStore()
         self.tools = ToolRuntime(root, self.safety, self.catalog, grants, self.approvals)
@@ -100,6 +108,54 @@ class Runtime:
         result = self.tools.execute(request)
         self.db.record(command, result)
         return result
+
+    def discover_applications(self) -> list[ApplicationRecord]:
+        return self.application_control.discover()
+
+    def refresh_applications(self) -> list[ApplicationRecord]:
+        return self.application_control.discover()
+
+    def list_applications(self) -> list[ApplicationRecord]:
+        return self.application_control.catalog.list()
+
+    def resolve_application(self, name: str) -> ResolutionResult:
+        return self.application_control.resolve(name)
+
+    def open_application(self, name: str) -> ApplicationOperationResult:
+        return self.application_control.operate("open", name)
+
+    def application_status(self, name: str) -> ApplicationOperationResult:
+        return self.application_control.operate("status", name)
+
+    def list_application_windows(self, name: str) -> list[object]:
+        resolved = self.resolve_application(name)
+        return (
+            list(self.application_control.adapter.windows())
+            if resolved.selected_application
+            else []
+        )
+
+    def focus_application(self, name: str) -> ApplicationOperationResult:
+        return self.application_control.operate("focus", name)
+
+    def minimize_application(self, name: str) -> ApplicationOperationResult:
+        return self.application_control.operate("minimize", name)
+
+    def maximize_application(self, name: str) -> ApplicationOperationResult:
+        return self.application_control.operate("maximize", name)
+
+    def restore_application(self, name: str) -> ApplicationOperationResult:
+        return self.application_control.operate("restore", name)
+
+    def close_application(
+        self, name: str, approval_token: str | None = None
+    ) -> ApplicationOperationResult:
+        return self.application_control.operate("close", name, approval_token)
+
+    def restart_application(
+        self, name: str, approval_token: str | None = None
+    ) -> ApplicationOperationResult:
+        return self.application_control.operate("restart", name, approval_token)
 
 
 def build_runtime(root: Path) -> Runtime:

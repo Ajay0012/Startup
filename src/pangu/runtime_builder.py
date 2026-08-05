@@ -4,6 +4,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .applications import (
+    ApplicationCatalog,
+    ApplicationControlRuntime,
+    ApplicationResolver,
+    RealWindowsApplicationAdapter,
+    WindowsApplicationAdapter,
+)
+from .approvals import PersistentApprovalService
 from .capabilities import CapabilityCatalog, ToolSpecification
 from .contracts import Risk
 from .database import DatabaseService
@@ -25,6 +33,7 @@ from .model_runtime import (
     ModelRouter,
     RetryPolicy,
 )
+from .permissions import PermissionGrant, PermissionStore
 from .settings import PanguSettings, resolve_application_root
 
 if TYPE_CHECKING:
@@ -49,14 +58,21 @@ class ServiceContainer:
     language: LanguageRuntime
     context: ContextAssembler
     model_capabilities: ModelCapabilityRegistry
+    application_adapter: WindowsApplicationAdapter
+    application_catalog: ApplicationCatalog
+    application_resolver: ApplicationResolver
+    application_control: ApplicationControlRuntime
     runtime: Runtime = field(init=False)
 
 
 class RuntimeBuilder:
     """The sole composition root; constructors perform no startup work."""
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(
+        self, root: Path | None = None, application_adapter: WindowsApplicationAdapter | None = None
+    ) -> None:
         self._root = root.resolve() if root is not None else resolve_application_root()
+        self._application_adapter = application_adapter
 
     def build(self) -> ServiceContainer:
         settings = PanguSettings.load_root(self._root)
@@ -99,6 +115,33 @@ class RuntimeBuilder:
                 frozenset({"filesystem.write:*"}),
             )
         )
+        for tool_id, operations in {
+            "application.discovery": {"read"},
+            "application.catalog": {"read", "refresh"},
+            "application.alias": {"read", "write"},
+            "application.control": {"open", "focus", "close", "restart"},
+            "application.window": {"list", "minimize", "maximize", "restore"},
+            "application.process": {"terminate"},
+        }.items():
+            catalog.register(
+                ToolSpecification(
+                    tool_id,
+                    "1.0.0",
+                    frozenset(operations),
+                    Risk.READ_ONLY if operations <= {"read", "list"} else Risk.LOW,
+                    frozenset(),
+                )
+            )
+        adapter = self._application_adapter or RealWindowsApplicationAdapter()
+        app_catalog = ApplicationCatalog(database, adapter)
+        app_resolver = ApplicationResolver(app_catalog)
+        app_control = ApplicationControlRuntime(
+            app_catalog,
+            app_resolver,
+            adapter,
+            PermissionStore((PermissionGrant("application.control:*", "default"),)),
+            PersistentApprovalService(database),
+        )
         catalog.register(
             ToolSpecification(
                 "system", "1.0.0", frozenset({"battery_status"}), Risk.READ_ONLY, frozenset()
@@ -121,6 +164,10 @@ class RuntimeBuilder:
             LanguageRuntime(),
             ContextAssembler(),
             capabilities,
+            adapter,
+            app_catalog,
+            app_resolver,
+            app_control,
         )
         from .runtime import Runtime
 
@@ -135,5 +182,6 @@ class RuntimeBuilder:
             container.context,
             container.model_router,
             container.cognitive_engine,
+            container.application_control,
         )
         return container
