@@ -32,7 +32,7 @@ class CommandRow(Base):
 class AuditRow(Base):
     __tablename__ = "audit_records"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    command_id: Mapped[str] = mapped_column(ForeignKey("commands.id"), index=True)
+    command_id: Mapped[str | None] = mapped_column(ForeignKey("commands.id"), index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(String, nullable=False)
     evidence: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
@@ -67,7 +67,7 @@ class ApprovalRow(Base):
 class RuntimeHealthRow(Base):
     __tablename__ = "runtime_health"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    component: Mapped[str] = mapped_column(String(128), unique=True)
+    component: Mapped[str | None] = mapped_column(String(128), unique=True)
     status: Mapped[str] = mapped_column(String(32))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
