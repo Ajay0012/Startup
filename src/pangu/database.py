@@ -82,6 +82,10 @@ class DatabaseService:
         self.timeout_seconds = timeout_seconds
         self._engine: Engine | None = None
         self._sessions: sessionmaker[Session] | None = None
+        self._accepting = False
+        self.lifecycle_state = "REGISTERED"
+        self.last_error: str | None = None
+        self.repository_ready = False
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,10 +106,13 @@ class DatabaseService:
         config.set_main_option("sqlalchemy.url", f"sqlite:///{self.path.as_posix()}")
         command.upgrade(config, "head")
         self._sessions = sessionmaker(self._engine, expire_on_commit=False)
+        self._accepting = True
+        self.repository_ready = True
+        self.lifecycle_state = "RUNNING"
 
     @contextmanager
     def transaction(self) -> Iterator[Session]:
-        if self._sessions is None:
+        if self._sessions is None or not self._accepting:
             raise RuntimeError("database is not started")
         session = self._sessions()
         try:
@@ -124,6 +131,52 @@ class DatabaseService:
             mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
             foreign_keys = connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
         return {"status": "ready", "journal_mode": str(mode), "foreign_keys": str(foreign_keys)}
+
+    def health_details(self) -> dict[str, object]:
+        if self._engine is None:
+            return {
+                "component": "database",
+                "lifecycle_state": self.lifecycle_state,
+                "database_ready": False,
+                "migration_revision": None,
+                "migration_head": "0002_persistent_exact_approval",
+                "migration_at_head": False,
+                "journal_mode": None,
+                "foreign_keys_enabled": False,
+                "busy_timeout_ms": None,
+                "repository_ready": self.repository_ready,
+                "last_error": self.last_error,
+                "degraded_reason": self.last_error,
+            }
+        with self._engine.connect() as connection:
+            revision = connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one()
+            mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
+            foreign_keys = connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
+            busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
+        at_head = revision == "0002_persistent_exact_approval"
+        ready = bool(
+            at_head
+            and str(mode).lower() == "wal"
+            and foreign_keys == 1
+            and self.repository_ready
+            and self._accepting
+        )
+        return {
+            "component": "database",
+            "lifecycle_state": self.lifecycle_state,
+            "database_ready": ready,
+            "migration_revision": revision,
+            "migration_head": "0002_persistent_exact_approval",
+            "migration_at_head": at_head,
+            "journal_mode": str(mode),
+            "foreign_keys_enabled": foreign_keys == 1,
+            "busy_timeout_ms": int(busy_timeout),
+            "repository_ready": self.repository_ready,
+            "last_error": self.last_error,
+            "degraded_reason": None if ready else "database is not ready",
+        }
 
     def record(self, command: CommandEnvelope, result: ToolResult) -> None:
         with self.transaction() as session:
@@ -155,6 +208,7 @@ class DatabaseService:
             self._engine.dispose()
             self._engine = None
             self._sessions = None
+        self.lifecycle_state = "STOPPED"
 
 
 class EventRow(Base):

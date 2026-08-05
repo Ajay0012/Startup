@@ -31,3 +31,7 @@ The required full PANGU specification is substantially broader than this initial
 ## Test-hardening update
 - Added 24 test cases for EventBus, Lifecycle Kernel, capabilities, permissions, filesystem, approvals, and runtime audit behavior.
 - Python validation: compileall passed; Ruff passed; mypy success for 14 source files; pytest: 26 passed.
+
+## Persistence lifecycle continuation
+
+Alembic head remains `0002_persistent_exact_approval`. The database has a single engine creation site in `DatabaseService`; the legacy `persistence.Database` remains a thin delegating facade. API health now includes structured, non-path-bearing database state and readiness fails closed when the database is unavailable.

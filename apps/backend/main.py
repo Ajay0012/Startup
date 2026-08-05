@@ -24,11 +24,21 @@ def shutdown() -> None:
 
 @app.get("/health")
 def health() -> dict[str, object]:
+    database = runtime.db.health_details()
     return {
-        "status": "ready",
+        "status": "ready" if database["database_ready"] else "degraded",
         "provider": "available" if runtime.settings.gemini_key_present else "degraded",
         "bind": "loopback-only",
+        "database": database,
     }
+
+
+@app.get("/ready")
+def ready() -> dict[str, object]:
+    database = runtime.db.health_details()
+    if not database["database_ready"]:
+        raise HTTPException(503, "database is not ready")
+    return {"status": "ready", "database": database}
 
 
 @app.post("/v1/commands")
