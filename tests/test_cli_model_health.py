@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import subprocess
 import sys
 from pathlib import Path
 
-from pytest import MonkeyPatch
+from pytest import MonkeyPatch, raises
 
 from pangu import cli
 from pangu.model_runtime import FakeGeminiTransport, ProviderErrorCode, ProviderHealth
@@ -37,7 +38,9 @@ def invoke(
     monkeypatch.setattr(cli, "RuntimeBuilder", StubBuilder(container))
     monkeypatch.setattr(sys, "argv", ["pangu", *args])
     code = cli.main()
-    output = json.loads(capsys.readouterr().out)  # type: ignore[union-attr]
+    captured = capsys.readouterr()  # type: ignore[union-attr]
+    assert "Traceback" not in captured.err
+    output = json.loads(captured.out)
     return code, output
 
 
@@ -75,6 +78,8 @@ def test_model_health_without_probe_makes_no_transport_request(
     assert code == 0
     assert transport.calls == []
     assert output["gemini"]["state"] == "INITIALIZING"  # type: ignore[index]
+    assert transport.closed
+    assert not container.runtime.started
 
 
 def test_successful_probe_is_healthy_and_shuts_down(
@@ -127,3 +132,50 @@ def test_timeout_probe_is_normalized(
     gemini = output["gemini"]  # type: ignore[index]
     assert gemini["state"] == ProviderHealth.OFFLINE  # type: ignore[index]
     assert gemini["last_failure"] == ProviderErrorCode.REQUEST_TIMEOUT  # type: ignore[index]
+    assert transport.closed
+    assert not container.runtime.started
+
+
+def test_probe_health_check_and_close_share_one_event_loop(
+    monkeypatch: MonkeyPatch, capsys: object, tmp_path: Path
+) -> None:
+    container = configured_container(tmp_path, monkeypatch)
+
+    class LoopTrackingTransport(FakeGeminiTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.loops: list[object] = []
+
+        async def health_check(self, model: str, timeout_seconds: float) -> None:
+            import asyncio
+
+            self.loops.append(asyncio.get_running_loop())
+            await super().health_check(model, timeout_seconds)
+
+        async def close(self) -> None:
+            import asyncio
+
+            self.loops.append(asyncio.get_running_loop())
+            await super().close()
+
+    transport = LoopTrackingTransport()
+    container.gemini_provider.transport = transport
+    code, _ = invoke(monkeypatch, capsys, container, "model-health", "--probe")
+    assert code == 0
+    assert len(transport.loops) == 2
+    assert transport.loops[0] is transport.loops[1]
+
+
+def test_module_probe_uses_injected_fake_transport(
+    monkeypatch: MonkeyPatch, capsys: object, tmp_path: Path
+) -> None:
+    container = configured_container(tmp_path, monkeypatch)
+    transport = FakeGeminiTransport()
+    container.gemini_provider.transport = transport
+    monkeypatch.setattr(cli, "RuntimeBuilder", StubBuilder(container))
+    monkeypatch.setattr(sys, "argv", ["pangu", "model-health", "--probe"])
+    with raises(SystemExit) as exit_code:
+        runpy.run_module("pangu", run_name="__main__")
+    assert exit_code.value.code == 0
+    assert json.loads(capsys.readouterr().out)["gemini"]["state"] == "HEALTHY"
+    assert transport.closed

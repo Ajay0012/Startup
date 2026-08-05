@@ -72,8 +72,28 @@ async def test_google_transport_uses_async_minimal_request_and_closes_client() -
     transport._client = client  # type: ignore[assignment]
     await transport.health_check("gemini-3.5-flash-lite", 1)
     await transport.close()
+    await transport.close()
     assert calls == [{"model": "gemini-3.5-flash-lite", "contents": "Reply with exactly OK."}]
     assert client.aio.closed
+
+
+@pytest.mark.asyncio
+async def test_provider_close_is_idempotent_and_closes_transport_once() -> None:
+    class CountingTransport(FakeGeminiTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            await super().close()
+
+    transport = CountingTransport()
+    provider = GeminiProvider("probe-test-key", transport=transport)
+    await provider.close()
+    await provider.close()
+    assert transport.closed
+    assert transport.close_calls == 1
 
 
 @pytest.mark.asyncio

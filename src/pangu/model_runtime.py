@@ -162,9 +162,9 @@ class GoogleGenAITransport:
         )
 
     async def close(self) -> None:
-        if self._client is not None:
-            await self._client.aio.aclose()
-            self._client = None
+        client, self._client = self._client, None
+        if client is not None:
+            await client.aio.aclose()
 
 
 class FakeGeminiTransport:
@@ -442,6 +442,7 @@ class GeminiProvider:
         self.last_success: float | None = None
         self.active_requests = 0
         self.retry_after: float | None = None
+        self._closed = False
 
     def health(self) -> ProviderHealth:
         return self._health
@@ -714,7 +715,10 @@ class GeminiProvider:
         )
 
     async def close(self) -> None:
-        if self.transport:
+        if self._closed:
+            return
+        self._closed = True
+        if self.transport is not None:
             await self.transport.close()
         self._health = ProviderHealth.STOPPED
 

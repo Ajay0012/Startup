@@ -8,7 +8,7 @@ from .runtime_builder import RuntimeBuilder
 from .settings import resolve_application_root
 
 
-def main() -> int:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="pangu")
     parser.add_argument(
         "command",
@@ -23,12 +23,17 @@ def main() -> int:
     args = parser.parse_args()
     if args.probe and args.command != "model-health":
         parser.error("--probe is only supported with model-health")
+    return args
+
+
+async def run_command(args: argparse.Namespace) -> int:
+    """Run the complete CLI lifecycle on one event loop."""
     container = RuntimeBuilder(resolve_application_root()).build()
     runtime = container.runtime
-    runtime.start()
-    exit_code = 0
     try:
+        await runtime.start_async()
         text = args.text or ""
+        exit_code = 0
         if args.command == "health":
             result: object = runtime.db.health_details()
         elif args.command == "models":
@@ -37,8 +42,8 @@ def main() -> int:
             }
         elif args.command == "model-health":
             if args.probe:
-                probe = asyncio.run(
-                    container.gemini_provider.probe_async(container.settings.gemini_timeout_seconds)
+                probe = await container.gemini_provider.probe_async(
+                    container.settings.gemini_timeout_seconds
                 )
                 exit_code = 0 if probe.health.value == "HEALTHY" else 1
             result = {
@@ -62,11 +67,16 @@ def main() -> int:
         else:
             result = runtime.decide(text).__dict__
         print(json.dumps(result, default=str))
+        return exit_code
     finally:
-        runtime.stop()
-        if args.probe:
-            asyncio.run(container.gemini_provider.close())
-    return exit_code
+        try:
+            await container.gemini_provider.close()
+        finally:
+            await runtime.stop_async()
+
+
+def main() -> int:
+    return asyncio.run(run_command(parse_args()))
 
 
 if __name__ == "__main__":
