@@ -32,7 +32,7 @@ def test_empty_database_migrates_to_head_with_sqlite_guards(tmp_path: Path) -> N
         with database._engine.connect() as connection:
             assert (
                 connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
-                == "0001_initial_runtime_schema"
+                == "0002_persistent_exact_approval"
             )
     finally:
         database.stop()

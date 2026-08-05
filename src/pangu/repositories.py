@@ -9,6 +9,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .database import (
+    ApprovalConsumptionRow,
+    ApprovalRevocationRow,
     ApprovalRow,
     AuditRow,
     CommandRow,
@@ -71,6 +73,19 @@ class ApprovalRecord:
     binding_hash: str
     actor: str
     expires_at: datetime
+    tool_id: str | None = None
+    tool_version: str | None = None
+    operation: str | None = None
+    arguments_json: dict[str, object] | None = None
+    target: str | None = None
+    risk_level: str | None = None
+    permission_scopes: list[str] | None = None
+    mission_id: str | None = None
+    session_id: str | None = None
+    approval_mode: str | None = None
+    created_at: datetime | None = None
+    exact_operation_hash: str | None = None
+    reusable: bool = False
     consumed_at: datetime | None = None
     revoked_at: datetime | None = None
 
@@ -255,19 +270,23 @@ class MissionCheckpointRepository(_Repository):
 
 
 class ApprovalRepository(_Repository):
-    def add(self, r: ApprovalRecord) -> ApprovalRecord:
-        self._add(ApprovalRow(**r.__dict__))
-        return r
+    def add(self, record: ApprovalRecord) -> ApprovalRecord:
+        self._add(ApprovalRow(**record.__dict__))
+        return record
 
-    def get(self, i: str) -> ApprovalRecord | None:
-        x = self._session.get(ApprovalRow, i)
-        return (
-            None
-            if x is None
-            else ApprovalRecord(
-                x.approval_id, x.binding_hash, x.actor, x.expires_at, x.consumed_at, x.revoked_at
+    def get(self, approval_id: str) -> ApprovalRecord | None:
+        row = self._session.get(ApprovalRow, approval_id)
+        return None if row is None else self._record(row)
+
+    def active_for_actor(self, actor: str, now: datetime) -> list[ApprovalRecord]:
+        rows = self._session.scalars(
+            select(ApprovalRow).where(
+                ApprovalRow.actor == actor,
+                ApprovalRow.expires_at > now,
+                ApprovalRow.revoked_at.is_(None),
             )
         )
+        return [self._record(row) for row in rows]
 
     def consume_once(self, approval_id: str, now: datetime) -> bool:
         from sqlalchemy import update
@@ -279,7 +298,49 @@ class ApprovalRepository(_Repository):
                 ApprovalRow.consumed_at.is_(None),
                 ApprovalRow.revoked_at.is_(None),
                 ApprovalRow.expires_at > now,
+                ApprovalRow.reusable.is_(False),
             )
             .values(consumed_at=now)
         )
-        return isinstance(result, CursorResult) and result.rowcount == 1
+        consumed = isinstance(result, CursorResult) and result.rowcount == 1
+        if consumed:
+            self._add(ApprovalConsumptionRow(approval_id=approval_id, created_at=now))
+        return consumed
+
+    def revoke(self, approval_id: str, now: datetime) -> bool:
+        from sqlalchemy import update
+
+        result = self._session.execute(
+            update(ApprovalRow)
+            .where(ApprovalRow.approval_id == approval_id, ApprovalRow.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        revoked = isinstance(result, CursorResult) and result.rowcount == 1
+        if revoked:
+            self._add(ApprovalRevocationRow(approval_id=approval_id, created_at=now))
+        return revoked
+
+    def consumptions(self, approval_id: str) -> list[ApprovalConsumptionRecord]:
+        return [
+            ApprovalConsumptionRecord(row.id, row.approval_id, row.created_at)
+            for row in self._session.scalars(
+                select(ApprovalConsumptionRow).where(
+                    ApprovalConsumptionRow.approval_id == approval_id
+                )
+            )
+        ]
+
+    def revocations(self, approval_id: str) -> list[ApprovalRevocationRecord]:
+        return [
+            ApprovalRevocationRecord(row.id, row.approval_id, row.created_at)
+            for row in self._session.scalars(
+                select(ApprovalRevocationRow).where(
+                    ApprovalRevocationRow.approval_id == approval_id
+                )
+            )
+        ]
+
+    def _record(self, row: ApprovalRow) -> ApprovalRecord:
+        return ApprovalRecord(
+            **{column.name: getattr(row, column.name) for column in ApprovalRow.__table__.columns}
+        )

@@ -49,6 +49,19 @@ class ApprovalRow(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tool_id: Mapped[str | None] = mapped_column(String(128))
+    tool_version: Mapped[str | None] = mapped_column(String(32))
+    operation: Mapped[str | None] = mapped_column(String(128))
+    arguments_json: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    target: Mapped[str | None] = mapped_column(String(1024))
+    risk_level: Mapped[str | None] = mapped_column(String(32))
+    permission_scopes: Mapped[list[str] | None] = mapped_column(JSON)
+    mission_id: Mapped[str | None] = mapped_column(String(36))
+    session_id: Mapped[str | None] = mapped_column(String(128))
+    approval_mode: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    exact_operation_hash: Mapped[str | None] = mapped_column(String(64))
+    reusable: Mapped[bool] = mapped_column(default=False, nullable=False)
 
 
 class RuntimeHealthRow(Base):
