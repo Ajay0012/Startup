@@ -243,6 +243,7 @@ async def run_command(args: argparse.Namespace) -> int:
                 if args.vad_threshold is not None and not 0 < args.vad_threshold <= 1:
                     raise ValueError("--vad-threshold must be between 0 and 1")
                 from pathlib import Path
+
                 from .voice import (
                     BoundedWaveDecoder,
                     VadConfiguration,

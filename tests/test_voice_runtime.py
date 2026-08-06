@@ -1,4 +1,5 @@
 import asyncio
+import json
 import wave
 from pathlib import Path
 
@@ -8,31 +9,349 @@ from pangu.events import EventBus
 from pangu.language import LanguageRuntime
 from pangu.voice import (
     AmbientNoiseEstimator,
-    AudioFrame,
     AudioDevice,
+    AudioFrame,
+    BoundedWaveDecoder,
     DeviceDisconnectedError,
     FakeAudioInputAdapter,
     FakeTranscriptionProvider,
     FakeVad,
+    FakeVoiceActivityDetector,
     FakeWakePhraseVerifier,
     FakeWakeWordEngine,
-    VoiceCaptureRequest,
-    VoiceConfig,
-    VadConfiguration,
-    VadDetectorResetError,
-    VoiceActivityResult,
-    VoiceActivityState,
+    SherpaOnnxSileroVadAdapter,
+    SileroVadModelManifest,
     SpeechSegmentController,
     SpeechTerminationReason,
-    VoiceSessionRuntime,
-    BoundedWaveDecoder,
-    FakeVoiceActivityDetector,
+    UnavailableVoiceActivityDetector,
+    VadActivationService,
+    VadConfiguration,
+    VadDetectorResetError,
     VadFileInferenceService,
+    VadModelStatus,
+    VoiceActivityResult,
+    VoiceActivityState,
+    VoiceCaptureRequest,
+    VoiceConfig,
+    VoiceSessionRuntime,
     VoiceState,
 )
 
-
 FORBIDDEN_AUDIO_KEYS = {"samples", "raw_audio", "audio_samples", "pcm", "waveform"}
+
+
+class ExactSherpaNative:
+    """Fake with the public sherpa-onnx VAD method signatures, exactly."""
+
+    def __init__(self, speech: bool = False, type_error: bool = False) -> None:
+        self.speech = speech
+        self.type_error = type_error
+        self.accepted: list[list[float]] = []
+        self.speech_calls = 0
+        self.flush_calls = 0
+        self.reset_calls = 0
+        self.queued_segments = ["native-only"]
+
+    def accept_waveform(self, samples):
+        if self.type_error:
+            raise TypeError("native argument mismatch")
+        self.accepted.append(samples)
+
+    def is_speech_detected(self):
+        self.speech_calls += 1
+        return self.speech
+
+    def flush(self):
+        self.flush_calls += 1
+
+    def reset(self):
+        self.reset_calls += 1
+
+
+def sherpa_adapter(native: ExactSherpaNative) -> SherpaOnnxSileroVadAdapter:
+    manifest = SileroVadModelManifest(
+        "silero-vad-v4",
+        "sherpa-onnx",
+        "v4",
+        "silero_vad.onnx",
+        "0" * 64,
+        "https://example.test/vad",
+    )
+    adapter = SherpaOnnxSileroVadAdapter(manifest, Path("silero_vad.onnx"))
+    adapter._detector = native
+    adapter.initialized = True
+    return adapter
+
+
+def native_result(
+    native: ExactSherpaNative, samples: tuple[float, ...] | None = None
+) -> VoiceActivityResult:
+    return sherpa_adapter(native).analyze(samples or (0.2,) * 512, 16000, 0.0)
+
+
+def test_sherpa_native_accept_waveform_receives_samples_only() -> None:
+    native = ExactSherpaNative()
+    native_result(native)
+    assert native.accepted == [[0.2] * 512]
+
+
+def test_sherpa_native_every_frame_has_exactly_512_samples(tmp_path: Path) -> None:
+    path = tmp_path / "windows.wav"
+    write_wav(path, 16000, 1, 600)
+    native = ExactSherpaNative()
+    config = VadConfiguration()
+    VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(native),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert native.accepted and all(len(samples) == 512 for samples in native.accepted)
+
+
+def test_sherpa_wrong_sample_rate_rejected_before_native_entry() -> None:
+    native = ExactSherpaNative()
+    with pytest.raises(ValueError, match="INVALID_VAD_FRAME"):
+        sherpa_adapter(native).analyze((0.2,) * 512, 8000, 0.0)
+    assert not native.accepted
+
+
+def test_sherpa_wrong_frame_length_rejected_before_native_entry() -> None:
+    native = ExactSherpaNative()
+    with pytest.raises(ValueError, match="INVALID_VAD_FRAME"):
+        sherpa_adapter(native).analyze((0.2,) * 511, 16000, 0.0)
+    assert not native.accepted
+
+
+@pytest.mark.parametrize("sample", [float("nan"), float("inf"), -float("inf")])
+def test_sherpa_non_finite_samples_rejected(sample: float) -> None:
+    native = ExactSherpaNative()
+    with pytest.raises(ValueError, match="INVALID_VAD_FRAME"):
+        sherpa_adapter(native).analyze((sample,) * 512, 16000, 0.0)
+    assert not native.accepted
+
+
+@pytest.mark.parametrize("sample", [-1.01, 1.01])
+def test_sherpa_out_of_range_samples_rejected(sample: float) -> None:
+    native = ExactSherpaNative()
+    with pytest.raises(ValueError, match="INVALID_VAD_FRAME"):
+        sherpa_adapter(native).analyze((sample,) * 512, 16000, 0.0)
+    assert not native.accepted
+
+
+def test_sherpa_is_speech_detected_is_called_as_a_method() -> None:
+    native = ExactSherpaNative(True)
+    assert native_result(native).is_speech and native.speech_calls == 1
+
+
+def test_sherpa_never_converts_bound_method_to_bool() -> None:
+    native = ExactSherpaNative(False)
+    assert not native_result(native).is_speech
+    assert native.speech_calls == 1
+
+
+def test_authoritative_backend_accepts_speech_and_energy_without_probability() -> None:
+    activity = native_result(ExactSherpaNative(True))
+    assert activity.probability is None
+    assert activity.accepted_for_segmentation(0.99)
+
+
+def test_probability_based_detector_still_requires_threshold() -> None:
+    activity = VoiceActivityResult(0, 0.49, True, 0.2, True, 32)
+    assert not activity.accepted_for_segmentation(0.5)
+
+
+def test_sherpa_probability_is_none() -> None:
+    assert native_result(ExactSherpaNative()).probability is None
+
+
+def test_authoritative_file_aggregate_probabilities_are_none(tmp_path: Path) -> None:
+    path = tmp_path / "authoritative.wav"
+    write_wav(path, 16000, 1, 512)
+    native = ExactSherpaNative()
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(native),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.average_vad_probability is None and result.maximum_vad_probability is None
+
+
+def test_authoritative_decisions_increment_processed_windows(tmp_path: Path) -> None:
+    path = tmp_path / "count.wav"
+    write_wav(path, 16000, 1, 600)
+    native = ExactSherpaNative()
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(native),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.processed_window_count == 2
+
+
+def test_zero_processed_windows_cannot_be_verified(tmp_path: Path) -> None:
+    path = tmp_path / "zero.wav"
+    write_wav(path, 16000, 1, 512)
+
+    class NoWindows(FakeVoiceActivityDetector):
+        def analyze(self, samples, sample_rate, timestamp):
+            raise RuntimeError("no result")
+
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(), NoWindows(), lambda: SpeechSegmentController(config), config
+    ).infer(path)
+    assert result.processed_window_count == 0 and result.verification_state == "UNVERIFIED"
+
+
+def test_sherpa_flush_is_called_once_at_eof(tmp_path: Path) -> None:
+    path = tmp_path / "flush.wav"
+    write_wav(path, 16000, 1, 512)
+    native = ExactSherpaNative()
+    config = VadConfiguration()
+    VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(native),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert native.flush_calls == 1
+
+
+def test_sherpa_reset_occurs_before_and_after_file_inference(tmp_path: Path) -> None:
+    path = tmp_path / "reset.wav"
+    write_wav(path, 16000, 1, 512)
+    native = ExactSherpaNative()
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(native),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert native.reset_calls == 2 and result.detector_reset_before and result.detector_reset_after
+
+
+def test_sherpa_adapter_is_reusable_for_sequential_file_inferences(tmp_path: Path) -> None:
+    path = tmp_path / "reuse.wav"
+    write_wav(path, 16000, 1, 512)
+    native = ExactSherpaNative()
+    config = VadConfiguration()
+    service = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(native),
+        lambda: SpeechSegmentController(config),
+        config,
+    )
+    assert (
+        service.infer(path).verification_state
+        == service.infer(path).verification_state
+        == "VERIFIED"
+    )
+    assert native.reset_calls == 4
+
+
+def test_sherpa_silence_creates_no_accepted_segments(tmp_path: Path) -> None:
+    path = tmp_path / "silence-native.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(False)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.accepted_segment_count == 0
+
+
+def test_sherpa_speech_can_create_and_accept_segment(tmp_path: Path) -> None:
+    path = tmp_path / "speech-native.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(True)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.accepted_segment_count == 1
+
+
+def test_native_type_error_is_normalized_without_traceback(tmp_path: Path) -> None:
+    path = tmp_path / "type-error.wav"
+    write_wav(path, 16000, 1, 512)
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(type_error=True)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.normalized_error == "VAD_INFERENCE_FAILED" and "Traceback" not in repr(result)
+
+
+def test_sherpa_native_queued_segments_are_not_duplicated_into_output(tmp_path: Path) -> None:
+    path = tmp_path / "queued.wav"
+    write_wav(path, 16000, 1, 1024)
+    native = ExactSherpaNative(True)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(native),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.accepted_segment_count == 1 and all(
+        "native-only" not in str(item) for item in result.segments
+    )
+
+
+def test_activation_failure_retains_an_unavailable_detector(tmp_path: Path) -> None:
+    service = VadActivationService(tmp_path, tmp_path / "missing-manifest.json")
+    detector = service.activate()
+    assert isinstance(detector, UnavailableVoiceActivityDetector)
+    assert service.detector is detector
+
+
+def test_partial_activation_closes_candidate_native_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "model_id": "silero-vad-v4",
+                "backend": "sherpa-onnx",
+                "version": "v4",
+                "filename": "silero_vad.onnx",
+                "sha256": "0" * 64,
+                "download_source": "https://example.test/vad",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class PartiallyActivatedAdapter:
+        closed = False
+
+        def __init__(self, manifest, model_path) -> None:
+            self.manifest = manifest
+            self.model_path = model_path
+
+        def initialize(self):
+            return VadModelStatus.LOAD_FAILED
+
+        def close(self) -> None:
+            type(self).closed = True
+
+    monkeypatch.setattr("pangu.voice.SherpaOnnxSileroVadAdapter", PartiallyActivatedAdapter)
+    service = VadActivationService(tmp_path, manifest_path)
+    assert isinstance(service.activate(), UnavailableVoiceActivityDetector)
+    assert PartiallyActivatedAdapter.closed
 
 
 def assert_public_payload_safe(value: object) -> None:

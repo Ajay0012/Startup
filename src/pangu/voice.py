@@ -13,8 +13,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from importlib import import_module
 from math import isfinite, sqrt
-from queue import Full, Queue
 from pathlib import Path
+from queue import Full, Queue
 from threading import Event, Thread
 from typing import Any, ClassVar, Protocol, cast
 from uuid import uuid4
@@ -64,6 +64,11 @@ class VoiceActivityState(StrEnum):
     TURN_ENDING = "ENDING"
 
 
+class VadDecisionSource(StrEnum):
+    PROBABILITY = "PROBABILITY"
+    AUTHORITATIVE_BACKEND = "AUTHORITATIVE_BACKEND"
+
+
 @dataclass(frozen=True)
 class VadConfiguration:
     sample_rate: int = 16000
@@ -98,7 +103,7 @@ class VadConfiguration:
 @dataclass(frozen=True)
 class VoiceActivityResult:
     timestamp: float
-    probability: float
+    probability: float | None
     is_speech: bool
     energy_level: float
     energy_gate_passed: bool
@@ -106,17 +111,34 @@ class VoiceActivityResult:
     detector_name: str = "fake-vad"
     verification_state: str = "VERIFIED"
     normalized_error: str | None = None
+    confidence_available: bool = True
+    decision_source: VadDecisionSource = VadDecisionSource.PROBABILITY
+    threshold_applied_by_backend: bool = False
 
     def valid(self) -> bool:
         return (
             isfinite(self.timestamp)
-            and isfinite(self.probability)
-            and 0 <= self.probability <= 1
+            and (
+                self.probability is None
+                or (isfinite(self.probability) and 0 <= self.probability <= 1)
+            )
             and isfinite(self.energy_level)
             and self.energy_level >= 0
             and isfinite(self.frame_duration_ms)
             and self.frame_duration_ms > 0
             and self.normalized_error is None
+            and (self.confidence_available == (self.probability is not None))
+        )
+
+    def accepted_for_segmentation(self, threshold: float) -> bool:
+        if not self.is_speech or not self.energy_gate_passed:
+            return False
+        if self.decision_source == VadDecisionSource.AUTHORITATIVE_BACKEND:
+            return not self.confidence_available and self.threshold_applied_by_backend
+        return (
+            self.confidence_available
+            and self.probability is not None
+            and self.probability >= threshold
         )
 
 
@@ -267,10 +289,8 @@ class SpeechSegmentController:
     def _speech(self, frame: AudioFrame, activity: VoiceActivityResult) -> bool:
         return (
             self._valid_frame(frame, activity)
-            and activity.is_speech
-            and activity.energy_gate_passed
             and activity.energy_level >= self.gate
-            and activity.probability >= self.config.speech_threshold
+            and activity.accepted_for_segmentation(self.config.speech_threshold)
         )
 
     def _emit(self, event_type: str, **payload: object) -> None:
@@ -341,7 +361,11 @@ class SpeechSegmentController:
                 samples,
                 len(candidate_frames),
                 0,
-                [item[1].probability for item in self._candidate],
+                [
+                    item[1].probability
+                    for item in self._candidate
+                    if item[1].probability is not None
+                ],
                 None,
                 sum(self._duration(item) for item in prefix),
                 0.0,
@@ -360,7 +384,8 @@ class SpeechSegmentController:
             self._segment._samples.extend(frame.samples)
             self._segment.end_timestamp = frame.timestamp
             self._segment.speech_frame_count += 1
-            self._segment.probabilities.append(activity.probability)
+            if activity.probability is not None:
+                self._segment.probabilities.append(activity.probability)
         else:
             if self.state == VoiceActivityState.SPEAKING:
                 self._transition(VoiceActivityState.ENDING)
@@ -998,6 +1023,7 @@ class SileroVadModelManifest:
     filename: str
     sha256: str
     download_source: str
+    schema_version: int = 1
     sample_rate: int = 16000
     window_size: int = 512
     license: str = "MIT"
@@ -1017,6 +1043,10 @@ class SileroVadModelManifest:
         result = cls(**data)
         if (
             not path.name == "manifest.json"
+            or result.schema_version != 1
+            or result.model_id != "silero-vad-v4"
+            or result.backend != "sherpa-onnx"
+            or result.version != "v4"
             or len(result.sha256) != 64
             or any(char not in "0123456789abcdefABCDEF" for char in result.sha256)
             or Path(result.filename).name != result.filename
@@ -1266,6 +1296,19 @@ class SherpaOnnxSileroVadAdapter:
             self.last_error = "MODEL_INITIALIZATION_FAILED"
         return self.status
 
+    def _read_native_speech_state(self) -> bool:
+        """Sherpa 1.13.4 exposes this as an instance method, not a property."""
+        assert self._detector is not None
+        state = getattr(self._detector, "is_speech_detected", None)
+        if not callable(state):
+            self.last_error = "VAD_BACKEND_API_INCOMPATIBLE"
+            raise TypeError("VAD_BACKEND_API_INCOMPATIBLE")
+        value = state()
+        if not isinstance(value, bool):
+            self.last_error = "VAD_BACKEND_API_INCOMPATIBLE"
+            raise TypeError("VAD_BACKEND_API_INCOMPATIBLE")
+        return value
+
     def analyze(
         self, samples: tuple[float, ...], sample_rate: int, timestamp: float
     ) -> VoiceActivityResult:
@@ -1274,28 +1317,37 @@ class SherpaOnnxSileroVadAdapter:
         if (
             sample_rate != self.manifest.sample_rate
             or len(samples) != self.manifest.window_size
-            or not all(isfinite(x) for x in samples)
+            or not all(isfinite(x) and -1 <= x <= 1 for x in samples)
         ):
             raise ValueError("INVALID_VAD_FRAME")
         try:
             # sherpa's detector owns streaming state; the public Python API accepts samples.
-            self._detector.accept_waveform(sample_rate, list(samples))
-            probability = float(getattr(self._detector, "probability", 0.0))
-        except (AttributeError, OSError, RuntimeError, ValueError):
+            self._detector.accept_waveform(list(samples))
+            detected = self._read_native_speech_state()
+        except (AttributeError, OSError, RuntimeError, ValueError, TypeError):
             self.last_error = "VAD_INFERENCE_FAILED"
             raise RuntimeError("VAD_INFERENCE_FAILED") from None
-        if not isfinite(probability) or not 0 <= probability <= 1:
-            raise RuntimeError("INVALID_VAD_PROBABILITY")
         energy = sqrt(sum(x * x for x in samples) / len(samples))
         return VoiceActivityResult(
             timestamp,
-            probability,
-            probability >= 0.5,
+            None,
+            detected,
             energy,
             energy >= 0.01,
             len(samples) * 1000 / sample_rate,
             "sherpa-onnx-silero",
+            confidence_available=False,
+            decision_source=VadDecisionSource.AUTHORITATIVE_BACKEND,
+            threshold_applied_by_backend=True,
         )
+
+    def flush(self) -> None:
+        if self.initialized and self._detector is not None:
+            try:
+                self._detector.flush()
+            except (AttributeError, OSError, RuntimeError, TypeError):
+                self.last_error = "VAD_INFERENCE_FAILED"
+                raise RuntimeError("VAD_INFERENCE_FAILED") from None
 
     def reset(self) -> None:
         if self.initialized and self._detector is not None:
@@ -1328,6 +1380,81 @@ class SherpaOnnxSileroVadAdapter:
         }
 
 
+class UnavailableVoiceActivityDetector:
+    """Safe default retained until an adapter has passed every activation check."""
+
+    def __init__(self, error: str = "VAD_UNAVAILABLE") -> None:
+        self.error = error
+
+    def analyze(
+        self, samples: tuple[float, ...], sample_rate: int, timestamp: float
+    ) -> VoiceActivityResult:
+        raise VadDetectorUnavailableError(self.error)
+
+    def reset(self) -> None:
+        return None
+
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "vad_backend": "sherpa-onnx",
+            "vad_model_status": "MISSING" if self.error == "VAD_MODEL_MISSING" else "UNAVAILABLE",
+            "vad_initialized": False,
+            "active_detector_type": type(self).__name__,
+            "vad_last_error": self.error,
+        }
+
+
+class VadActivationService:
+    """RuntimeBuilder-owned, all-or-nothing local model activation boundary."""
+
+    def __init__(self, model_root: Path, manifest_path: Path) -> None:
+        self.model_root, self.manifest_path = model_root.resolve(), manifest_path
+        self.detector: VoiceActivityDetector = UnavailableVoiceActivityDetector()
+        self.last_error: str | None = "VAD_UNAVAILABLE"
+        self.manifest_status = "MISSING"
+
+    def activate(self) -> VoiceActivityDetector:
+        candidate: SherpaOnnxSileroVadAdapter | None = None
+        try:
+            manifest = SileroVadModelManifest.load(self.manifest_path)
+            self.manifest_status = "VALID"
+            target = (
+                self.model_root / "voice" / "vad" / "silero" / manifest.version / manifest.filename
+            ).resolve()
+            if not target.is_relative_to(self.model_root):
+                raise ValueError("MODEL_PATH_INVALID")
+            candidate = SherpaOnnxSileroVadAdapter(manifest, target)
+            status = candidate.initialize()
+            if status != VadModelStatus.AVAILABLE:
+                self.last_error = status.value
+                candidate.close()
+                self.detector = UnavailableVoiceActivityDetector(self.last_error)
+                return self.detector
+            self.detector = candidate
+            self.last_error = None
+            return candidate
+        except (OSError, ValueError, json.JSONDecodeError):
+            if candidate:
+                candidate.close()
+            self.manifest_status = "INVALID"
+            self.last_error = "MANIFEST_INVALID"
+            self.detector = UnavailableVoiceActivityDetector(self.last_error)
+            return self.detector
+
+    def diagnostics(self) -> dict[str, object]:
+        details = self.detector.diagnostics() if hasattr(self.detector, "diagnostics") else {}
+        return {
+            **details,
+            "manifest_status": self.manifest_status,
+            "active_detector_type": type(self.detector).__name__,
+            "vad_last_error": self.last_error,
+        }
+
+    def close(self) -> None:
+        if isinstance(self.detector, SherpaOnnxSileroVadAdapter):
+            self.detector.close()
+
+
 @dataclass(frozen=True)
 class VadFileInferenceResult:
     operation: str = "vad-file-test"
@@ -1342,8 +1469,8 @@ class VadFileInferenceResult:
     normalized_duration_seconds: float = 0.0
     processed_window_count: int = 0
     padded_sample_count: int = 0
-    average_vad_probability: float = 0.0
-    maximum_vad_probability: float = 0.0
+    average_vad_probability: float | None = None
+    maximum_vad_probability: float | None = None
     vad_positive_frame_count: int = 0
     energy_gate_positive_frame_count: int = 0
     speech_candidate_count: int = 0
@@ -1423,6 +1550,7 @@ class VadFileInferenceService:
         before = after = False
         segments: list[SpeechSegment] = []
         probabilities: list[float] = []
+        processed_windows = 0
         vad_positive = energy_positive = 0
         controller = self.controller_factory()
         error: str | None = None
@@ -1441,7 +1569,9 @@ class VadFileInferenceService:
                 )
                 if not activity.valid():
                     raise VadInvalidProbabilityError
-                probabilities.append(activity.probability)
+                processed_windows += 1
+                if activity.probability is not None:
+                    probabilities.append(activity.probability)
                 vad_positive += int(activity.is_speech)
                 energy_positive += int(activity.energy_gate_passed)
                 result = controller.process(
@@ -1454,6 +1584,8 @@ class VadFileInferenceService:
                 if result:
                     segments.append(result)
             if error is None:
+                if hasattr(self.detector, "flush"):
+                    cast(Any, self.detector).flush()
                 terminal = controller.end_of_file()
                 if terminal:
                     segments.append(terminal)
@@ -1474,14 +1606,16 @@ class VadFileInferenceService:
         cleaned = audio.samples_cleared and all(not item.samples for item in segments) and after
         if not cleaned:
             error = error or "VAD_CLEANUP_UNVERIFIED"
+        if error is None and meta.normalized_sample_count and not processed_windows:
+            error = "VAD_INFERENCE_UNVERIFIED"
         return VadFileInferenceResult(
             **cast(Any, common),
-            processed_window_count=len(probabilities),
+            processed_window_count=processed_windows,
             padded_sample_count=padded,
             average_vad_probability=sum(probabilities) / len(probabilities)
             if probabilities
-            else 0.0,
-            maximum_vad_probability=max(probabilities, default=0.0),
+            else None,
+            maximum_vad_probability=max(probabilities) if probabilities else None,
             vad_positive_frame_count=vad_positive,
             energy_gate_positive_frame_count=energy_positive,
             accepted_segment_count=len(safe),

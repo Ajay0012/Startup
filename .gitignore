@@ -19,3 +19,6 @@ runtime-data/*
 .pytest-run-*/
 .test-runtime/
 .test-temp/
+models/voice/**/*.onnx
+models/voice/**/*.partial
+models/voice/**/*.tmp

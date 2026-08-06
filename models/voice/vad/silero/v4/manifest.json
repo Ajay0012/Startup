@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "model_id": "silero-vad-v4",
   "backend": "sherpa-onnx",
   "version": "v4",
