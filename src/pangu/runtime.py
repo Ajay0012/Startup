@@ -22,6 +22,7 @@ from .permissions import PermissionGrant, PermissionStore
 from .security import ApprovalStore, SafetyGateway
 from .system_control import SystemControlResult, SystemControlRuntime
 from .tools import ToolRuntime
+from .voice import VoiceSessionRuntime
 
 
 class Runtime:
@@ -41,6 +42,7 @@ class Runtime:
         cognitive_engine: CognitiveEngine,
         application_control: ApplicationControlRuntime,
         system_control: SystemControlRuntime,
+        voice: VoiceSessionRuntime,
     ) -> None:
         self.root, self.settings = root, settings
         self.db, self.lifecycle, self.events, self.catalog = database, lifecycle, events, catalog
@@ -53,6 +55,7 @@ class Runtime:
         self.safety = SafetyGateway()
         self.application_control = application_control
         self.system_control = system_control
+        self.voice = voice
         grants = PermissionStore((PermissionGrant("filesystem.write:*", "default"),))
         self.approvals = ApprovalStore()
         self.tools = ToolRuntime(root, self.safety, self.catalog, grants, self.approvals)
@@ -65,6 +68,10 @@ class Runtime:
             self.db.stop()
 
         self.lifecycle.register(LifecycleService("database", start_database, stop_database))
+        self.lifecycle.register(LifecycleService("events", self.events.start, self.events.stop))
+        self.lifecycle.register(
+            LifecycleService("voice", self.voice.start, self.voice.stop, ("events",))
+        )
 
     def start(self) -> None:
         asyncio.run(self.start_async())

@@ -37,6 +37,14 @@ from .permissions import PermissionGrant, PermissionStore
 from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
 from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
+from .voice import (
+    FakeTranscriptionProvider,
+    FakeWakePhraseVerifier,
+    SherpaOnnxSileroVad,
+    SherpaOnnxWakeWordEngine,
+    VoiceSessionRuntime,
+    WindowsAudioInputAdapter,
+)
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -65,6 +73,7 @@ class ServiceContainer:
     application_resolver: ApplicationResolver
     application_control: ApplicationControlRuntime
     system_control: SystemControlRuntime
+    voice: VoiceSessionRuntime
     runtime: Runtime = field(init=False)
 
 
@@ -76,14 +85,17 @@ class RuntimeBuilder:
         root: Path | None = None,
         application_adapter: WindowsApplicationAdapter | None = None,
         system_control_adapter: SystemControlAdapter | None = None,
+        voice_runtime: VoiceSessionRuntime | None = None,
     ) -> None:
         self._root = root.resolve() if root is not None else resolve_application_root()
         self._application_adapter = application_adapter
         self._system_control_adapter = system_control_adapter
+        self._voice_runtime = voice_runtime
 
     def build(self) -> ServiceContainer:
         settings = PanguSettings.load_root(self._root)
         database = DatabaseService(self._root / "runtime-data" / "database" / "pangu.db")
+        events = EventBus()
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
         api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
@@ -193,12 +205,21 @@ class RuntimeBuilder:
             SafetyGateway(),
             database,
         )
+        voice = self._voice_runtime or VoiceSessionRuntime(
+            WindowsAudioInputAdapter(),
+            SherpaOnnxSileroVad(),
+            SherpaOnnxWakeWordEngine(),
+            FakeWakePhraseVerifier(),
+            FakeTranscriptionProvider(),
+            events,
+            LanguageRuntime(),
+        )
         container = ServiceContainer(
             self._root,
             settings,
             database,
             LifecycleKernel(),
-            EventBus(),
+            events,
             catalog,
             sanitizer,
             gemini.circuit,
@@ -215,6 +236,7 @@ class RuntimeBuilder:
             app_resolver,
             app_control,
             system_control,
+            voice,
         )
         from .runtime import Runtime
 
@@ -231,5 +253,6 @@ class RuntimeBuilder:
             container.cognitive_engine,
             container.application_control,
             container.system_control,
+            container.voice,
         )
         return container

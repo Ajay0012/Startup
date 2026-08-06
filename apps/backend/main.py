@@ -70,6 +70,18 @@ def create_app(container: ServiceContainer) -> FastAPI:
             raise HTTPException(503, "database is not ready")
         return {"status": "ready", "database": database}
 
+    @app.get("/voice/health")
+    def voice_health() -> dict[str, object]:
+        return runtime.voice.diagnostics().__dict__
+
+    @app.get("/voice/devices")
+    def voice_devices() -> dict[str, object]:
+        return {"devices": [device.__dict__ for device in runtime.voice.devices()]}
+
+    @app.get("/voice/diagnostics")
+    def voice_diagnostics() -> dict[str, object]:
+        return runtime.voice.diagnostics().__dict__
+
     @app.get("/api/v1/models/health")
     def model_health() -> dict[str, object]:
         return {

@@ -67,18 +67,30 @@ class EventBus:
                 _, _, event = await asyncio.wait_for(self._queue.get(), timeout=0.1)
             except TimeoutError:
                 continue
-            for handler in self._handlers.get(event.event_type, []):
-                try:
-                    await asyncio.wait_for(handler(event), timeout=self.handler_timeout)
-                except (TimeoutError, RuntimeError, ValueError, OSError):
-                    self.dead_letters.append(event)
-            self._queue.task_done()
+            try:
+                for handler in self._handlers.get(event.event_type, []):
+                    try:
+                        await asyncio.wait_for(handler(event), timeout=self.handler_timeout)
+                    except (TimeoutError, RuntimeError, ValueError, OSError):
+                        self.dead_letters.append(event)
+            finally:
+                self._queue.task_done()
 
     async def stop(self) -> None:
         if not self._running:
             return
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout=self.handler_timeout + 1.0)
+        except TimeoutError:
+            # Bounded shutdown: incomplete telemetry is discarded after publishers stop.
+            while not self._queue.empty():
+                self._queue.get_nowait()
+                self._queue.task_done()
         self._running = False
-        await self._queue.join()
         if self._worker:
-            await self._worker
+            self._worker.cancel()
+            try:
+                await self._worker
+            except asyncio.CancelledError:
+                pass
             self._worker = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from dataclasses import asdict
 from typing import cast
 
 from .applications import (
@@ -31,12 +32,15 @@ def parse_args() -> argparse.Namespace:
             "decide",
             "apps",
             "system",
+            "voice",
         ),
     )
     parser.add_argument("text", nargs="?")
     parser.add_argument("apps_action", nargs="?")
     parser.add_argument("system_value", nargs="?")
     parser.add_argument("--display")
+    parser.add_argument("--device")
+    parser.add_argument("--seconds", type=int, default=5)
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--name")
     parser.add_argument("--source")
@@ -202,6 +206,26 @@ async def run_command(args: argparse.Namespace) -> int:
                 raise ValueError("invalid system command")
             result = result.public()
             exit_code = _system_exit_code(result)
+        elif args.command == "voice":
+            action = args.text
+            if action == "devices":
+                discovery = runtime.voice.discover_devices(refresh=True)
+                result = asdict(discovery)
+                exit_code = _voice_exit_code(discovery.normalized_error)
+            elif action == "diagnostics":
+                result = runtime.voice.diagnostics().__dict__
+            elif action == "capture-test":
+                if not 1 <= args.seconds <= 30:
+                    raise ValueError("--seconds must be between 1 and 30")
+                from .voice import VoiceCaptureRequest
+
+                capture = await runtime.voice.capture_test(
+                    VoiceCaptureRequest(args.seconds, args.device)
+                )
+                result = asdict(capture)
+                exit_code = _voice_exit_code(capture.normalized_error, capture.verification_state)
+            else:
+                raise ValueError("voice supports devices, diagnostics, or capture-test in Phase 1A")
         else:
             result = runtime.decide(text).__dict__
         if args.command == "apps" and action == "list" and not args.as_json:
@@ -266,6 +290,18 @@ def _system_exit_code(value: dict[str, object]) -> int:
         "NO_COMPATIBLE_DISPLAY": 7,
         "POSTCONDITION_TIMEOUT": 8,
     }.get(str(error), 0)
+
+
+def _voice_exit_code(error: str | None, state: str = "VERIFIED") -> int:
+    if error in {"NO_INPUT_DEVICE", "STALE_DEVICE_SELECTOR"}:
+        return 3
+    if error == "AMBIGUOUS_DEVICE":
+        return 4
+    if error in {"PORTAUDIO_FAILURE", "STREAM_FAILURE", "DEVICE_DISCONNECTED"}:
+        return 6
+    if error == "BACKEND_UNAVAILABLE":
+        return 7
+    return 0 if state == "VERIFIED" else 8
 
 
 if __name__ == "__main__":
