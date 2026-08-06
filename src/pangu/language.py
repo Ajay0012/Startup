@@ -19,6 +19,62 @@ class LanguageRuntime:
     def normalize(self, text: str) -> NormalizedIntent:
         clean = " ".join(text.strip().split())
         lower = clean.lower()
+        system = re.fullmatch(r"(?:set )?volume\s+(\d{1,3})(?:\s+(?:ku )?set(?: pannu)?)?", lower)
+        if system:
+            return NormalizedIntent(
+                "set_volume",
+                f"Set volume to {system.group(1)}",
+                clean,
+                {"value": system.group(1)},
+                0.97,
+                "ta-en" if "pannu" in lower or "ku" in lower else "en",
+            )
+        system = re.fullmatch(
+            r"(?:increase|raise|decrease|lower)\s+volume(?:\s+(?:by )?(\d{1,3}))?", lower
+        )
+        if system:
+            name = (
+                "decrease_volume"
+                if system.group(0).startswith(("decrease", "lower"))
+                else "increase_volume"
+            )
+            return NormalizedIntent(
+                name, name.replace("_", " "), clean, {"step": system.group(1) or "5"}, 0.96
+            )
+        system = re.fullmatch(
+            r"(?:set )?brightness\s+(\d{1,3})(?:\s+(?:ku )?set(?: pannu)?)?", lower
+        )
+        if system:
+            return NormalizedIntent(
+                "set_brightness",
+                f"Set brightness to {system.group(1)}",
+                clean,
+                {"value": system.group(1)},
+                0.97,
+                "ta-en" if "pannu" in lower or "ku" in lower else "en",
+            )
+        system = re.fullmatch(
+            r"(?:increase|raise|decrease|lower)\s+brightness(?:\s+(?:by )?(\d{1,3}))?", lower
+        )
+        if system:
+            name = (
+                "decrease_brightness"
+                if system.group(0).startswith(("decrease", "lower"))
+                else "increase_brightness"
+            )
+            return NormalizedIntent(
+                name, name.replace("_", " "), clean, {"step": system.group(1) or "5"}, 0.96
+            )
+        if re.fullmatch(r"(?:mute|mute pannu)", lower):
+            return NormalizedIntent(
+                "mute",
+                "Mute system audio",
+                clean,
+                confidence=0.97,
+                detected_language="ta-en" if "pannu" in lower else "en",
+            )
+        if lower in {"unmute", "toggle mute"}:
+            return NormalizedIntent(lower.replace(" ", "_"), lower.title(), clean, confidence=0.97)
         for pattern, name, english in self._rules:
             match = re.fullmatch(pattern, lower)
             if match:

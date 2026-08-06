@@ -30,10 +30,13 @@ def parse_args() -> argparse.Namespace:
             "route",
             "decide",
             "apps",
+            "system",
         ),
     )
     parser.add_argument("text", nargs="?")
     parser.add_argument("apps_action", nargs="?")
+    parser.add_argument("system_value", nargs="?")
+    parser.add_argument("--display")
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--name")
     parser.add_argument("--source")
@@ -159,6 +162,46 @@ async def run_command(args: argparse.Namespace) -> int:
                     "discovery_run_status": "completed",
                 }
             exit_code = _application_exit_code(value)
+        elif args.command == "system":
+            group, action, raw = args.text, args.apps_action, args.system_value
+            if group == "volume":
+                operations = {
+                    None: "get_volume",
+                    "set": "set_volume",
+                    "increase": "increase_volume",
+                    "decrease": "decrease_volume",
+                }
+                if action not in operations or (action and raw is None):
+                    raise ValueError("invalid volume command")
+                result = runtime.system_audio(
+                    operations[action], int(raw) if raw is not None else None
+                )
+            elif group == "mute":
+                operations = {
+                    "status": "get_mute_state",
+                    "on": "mute",
+                    "off": "unmute",
+                    "toggle": "toggle_mute",
+                }
+                if action not in operations or raw is not None:
+                    raise ValueError("invalid mute command")
+                result = runtime.system_audio(operations[action])
+            elif group == "brightness":
+                operations = {
+                    None: "get_brightness",
+                    "set": "set_brightness",
+                    "increase": "increase_brightness",
+                    "decrease": "decrease_brightness",
+                }
+                if action not in operations or (action and raw is None):
+                    raise ValueError("invalid brightness command")
+                result = runtime.system_brightness(
+                    operations[action], int(raw) if raw is not None else None, args.display
+                )
+            else:
+                raise ValueError("invalid system command")
+            result = result.public()
+            exit_code = _system_exit_code(result)
         else:
             result = runtime.decide(text).__dict__
         if args.command == "apps" and action == "list" and not args.as_json:
@@ -207,6 +250,22 @@ def _application_exit_code(value: object) -> int:
             VerificationState.PARTIALLY_VERIFIED: 8,
         }.get(value.verification_state, 0)
     return 0
+
+
+def _system_exit_code(value: dict[str, object]) -> int:
+    error = value.get("normalized_error")
+    return {
+        "NOT_FOUND": 3,
+        "AMBIGUOUS": 4,
+        "DENIED": 5,
+        "NATIVE_FAILURE": 6,
+        "UNSUPPORTED": 7,
+        "AUDIO_ADAPTER_UNAVAILABLE": 7,
+        "NO_ACTIVE_AUDIO_ENDPOINT": 7,
+        "BRIGHTNESS_ADAPTER_UNAVAILABLE": 7,
+        "NO_COMPATIBLE_DISPLAY": 7,
+        "POSTCONDITION_TIMEOUT": 8,
+    }.get(str(error), 0)
 
 
 if __name__ == "__main__":

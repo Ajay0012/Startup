@@ -28,6 +28,32 @@ def create_app(container: ServiceContainer) -> FastAPI:
         name: str
         approval_token: str | None = None
 
+    class VolumeRequest(BaseModel):
+        value: int | None = None
+        operation: str = "set_volume"
+
+    class MuteRequest(BaseModel):
+        operation: str
+
+    class BrightnessRequest(BaseModel):
+        value: int | None = None
+        operation: str = "set_brightness"
+        display_selector: str | None = None
+
+    def system_response(value: object) -> dict[str, object]:
+        result = value.public()  # type: ignore[union-attr]
+        status = {
+            "NOT_FOUND": 404,
+            "AMBIGUOUS": 409,
+            "DENIED": 403,
+            "UNSUPPORTED": 501,
+            "NATIVE_FAILURE": 502,
+            "POSTCONDITION_TIMEOUT": 409,
+        }.get(result["normalized_error"])
+        if status:
+            raise HTTPException(status, result)
+        return result
+
     @app.get("/health")
     def health() -> dict[str, object]:
         database = runtime.db.health_details()
@@ -87,6 +113,38 @@ def create_app(container: ServiceContainer) -> FastAPI:
     @app.post("/api/v1/cognition/decide")
     def decide(payload: dict[str, str]) -> dict[str, object]:
         return runtime.decide(payload.get("text", "")).__dict__
+
+    @app.get("/system/audio")
+    def system_audio(x_pangu_actor: str = Header("default")) -> dict[str, object]:
+        return system_response(runtime.system_audio("get_volume", actor=x_pangu_actor))
+
+    @app.post("/system/audio/volume")
+    def system_volume(
+        payload: VolumeRequest, x_pangu_actor: str = Header("default")
+    ) -> dict[str, object]:
+        return system_response(
+            runtime.system_audio(payload.operation, payload.value, x_pangu_actor)
+        )
+
+    @app.post("/system/audio/mute")
+    def system_mute(
+        payload: MuteRequest, x_pangu_actor: str = Header("default")
+    ) -> dict[str, object]:
+        return system_response(runtime.system_audio(payload.operation, None, x_pangu_actor))
+
+    @app.get("/system/brightness")
+    def system_brightness(x_pangu_actor: str = Header("default")) -> dict[str, object]:
+        return system_response(runtime.system_brightness("get_brightness", actor=x_pangu_actor))
+
+    @app.post("/system/brightness")
+    def set_system_brightness(
+        payload: BrightnessRequest, x_pangu_actor: str = Header("default")
+    ) -> dict[str, object]:
+        return system_response(
+            runtime.system_brightness(
+                payload.operation, payload.value, payload.display_selector, x_pangu_actor
+            )
+        )
 
     @app.get("/api/v1/applications")
     def applications(

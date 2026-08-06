@@ -20,6 +20,7 @@ from .lifecycle import LifecycleKernel, LifecycleService
 from .model_runtime import CognitiveDecision, CognitiveEngine, ContextAssembler, ModelRouter
 from .permissions import PermissionGrant, PermissionStore
 from .security import ApprovalStore, SafetyGateway
+from .system_control import SystemControlResult, SystemControlRuntime
 from .tools import ToolRuntime
 
 
@@ -39,6 +40,7 @@ class Runtime:
         model_router: ModelRouter,
         cognitive_engine: CognitiveEngine,
         application_control: ApplicationControlRuntime,
+        system_control: SystemControlRuntime,
     ) -> None:
         self.root, self.settings = root, settings
         self.db, self.lifecycle, self.events, self.catalog = database, lifecycle, events, catalog
@@ -50,6 +52,7 @@ class Runtime:
         )
         self.safety = SafetyGateway()
         self.application_control = application_control
+        self.system_control = system_control
         grants = PermissionStore((PermissionGrant("filesystem.write:*", "default"),))
         self.approvals = ApprovalStore()
         self.tools = ToolRuntime(root, self.safety, self.catalog, grants, self.approvals)
@@ -87,6 +90,15 @@ class Runtime:
             "open_application",
             "mute_volume",
             "volume_down",
+            "set_volume",
+            "increase_volume",
+            "decrease_volume",
+            "mute",
+            "unmute",
+            "toggle_mute",
+            "set_brightness",
+            "increase_brightness",
+            "decrease_brightness",
         }
         route = self.model_router.route(intent.canonical_english, deterministic)
         return self.cognitive_engine.decide(intent.intent_name, route, intent.original_text)
@@ -180,6 +192,20 @@ class Runtime:
         self, name: str, approval_token: str | None = None
     ) -> ApplicationOperationResult:
         return self.application_control.operate("restart", name, approval_token)
+
+    def system_audio(
+        self, operation: str, value: int | bool | None = None, actor: str = "default"
+    ) -> SystemControlResult:
+        return self.system_control.audio(operation, value, actor)
+
+    def system_brightness(
+        self,
+        operation: str,
+        value: int | None = None,
+        selector: str | None = None,
+        actor: str = "default",
+    ) -> SystemControlResult:
+        return self.system_control.brightness(operation, value, selector, actor)
 
 
 def build_runtime(root: Path) -> Runtime:

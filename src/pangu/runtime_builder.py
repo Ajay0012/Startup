@@ -34,7 +34,9 @@ from .model_runtime import (
     RetryPolicy,
 )
 from .permissions import PermissionGrant, PermissionStore
+from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
+from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -62,6 +64,7 @@ class ServiceContainer:
     application_catalog: ApplicationCatalog
     application_resolver: ApplicationResolver
     application_control: ApplicationControlRuntime
+    system_control: SystemControlRuntime
     runtime: Runtime = field(init=False)
 
 
@@ -69,10 +72,14 @@ class RuntimeBuilder:
     """The sole composition root; constructors perform no startup work."""
 
     def __init__(
-        self, root: Path | None = None, application_adapter: WindowsApplicationAdapter | None = None
+        self,
+        root: Path | None = None,
+        application_adapter: WindowsApplicationAdapter | None = None,
+        system_control_adapter: SystemControlAdapter | None = None,
     ) -> None:
         self._root = root.resolve() if root is not None else resolve_application_root()
         self._application_adapter = application_adapter
+        self._system_control_adapter = system_control_adapter
 
     def build(self) -> ServiceContainer:
         settings = PanguSettings.load_root(self._root)
@@ -147,6 +154,45 @@ class RuntimeBuilder:
                 "system", "1.0.0", frozenset({"battery_status"}), Risk.READ_ONLY, frozenset()
             )
         )
+        catalog.register(
+            ToolSpecification(
+                "system.control",
+                "1.0.0",
+                frozenset(
+                    {
+                        "get_volume",
+                        "set_volume",
+                        "increase_volume",
+                        "decrease_volume",
+                        "get_mute_state",
+                        "mute",
+                        "unmute",
+                        "toggle_mute",
+                        "get_brightness",
+                        "set_brightness",
+                        "increase_brightness",
+                        "decrease_brightness",
+                    }
+                ),
+                Risk.LOW,
+                frozenset(),
+            )
+        )
+        system_permissions = PermissionStore(
+            (
+                PermissionGrant("system.audio.read", "default"),
+                PermissionGrant("system.audio.write", "default"),
+                PermissionGrant("system.brightness.read", "default"),
+                PermissionGrant("system.brightness.write", "default"),
+            )
+        )
+        system_control = SystemControlRuntime(
+            self._system_control_adapter or WindowsSystemControlAdapter(),
+            catalog,
+            system_permissions,
+            SafetyGateway(),
+            database,
+        )
         container = ServiceContainer(
             self._root,
             settings,
@@ -168,6 +214,7 @@ class RuntimeBuilder:
             app_catalog,
             app_resolver,
             app_control,
+            system_control,
         )
         from .runtime import Runtime
 
@@ -183,5 +230,6 @@ class RuntimeBuilder:
             container.model_router,
             container.cognitive_engine,
             container.application_control,
+            container.system_control,
         )
         return container
