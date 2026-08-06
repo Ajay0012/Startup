@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from importlib import import_module
@@ -42,6 +42,536 @@ class VoiceOutcome(StrEnum):
     UNCERTAIN = "UNCERTAIN"
     TIMEOUT = "TIMEOUT"
     UNAVAILABLE = "UNAVAILABLE"
+
+
+class VoiceActivityState(StrEnum):
+    """States owned by the deterministic, input-side segment controller."""
+
+    IDLE = "IDLE"
+    CANDIDATE = "CANDIDATE"
+    SPEAKING = "SPEAKING"
+    ENDING = "ENDING"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
+    # Compatibility names for callers which used the original scaffold.
+    IDLE_LISTENING = "IDLE"
+    SPEECH_CANDIDATE = "CANDIDATE"
+    USER_SPEAKING = "SPEAKING"
+    TURN_ENDING = "ENDING"
+
+
+@dataclass(frozen=True)
+class VadConfiguration:
+    sample_rate: int = 16000
+    window_size: int = 512
+    speech_threshold: float = 0.5
+    minimum_speech_ms: int = 250
+    minimum_silence_ms: int = 700
+    prefix_padding_ms: int = 400
+    trailing_padding_ms: int = 200
+    maximum_utterance_seconds: int = 30
+    minimum_energy_floor: float = 0.01
+    calibration_duration_seconds: int = 10
+
+    def __post_init__(self) -> None:
+        if (
+            self.sample_rate != 16000
+            or self.window_size <= 0
+            or not isfinite(self.speech_threshold)
+            or not 0 < self.speech_threshold <= 1
+            or self.minimum_speech_ms < 1
+            or self.minimum_silence_ms < 1
+            or self.prefix_padding_ms < 0
+            or self.trailing_padding_ms < 0
+            or not 1 <= self.maximum_utterance_seconds <= 300
+            or not isfinite(self.minimum_energy_floor)
+            or not 0 <= self.minimum_energy_floor <= 1
+            or not 3 <= self.calibration_duration_seconds <= 30
+        ):
+            raise ValueError("invalid VAD configuration")
+
+
+@dataclass(frozen=True)
+class VoiceActivityResult:
+    timestamp: float
+    probability: float
+    is_speech: bool
+    energy_level: float
+    energy_gate_passed: bool
+    frame_duration_ms: float
+    detector_name: str = "fake-vad"
+    verification_state: str = "VERIFIED"
+    normalized_error: str | None = None
+
+    def valid(self) -> bool:
+        return (
+            isfinite(self.timestamp)
+            and isfinite(self.probability)
+            and 0 <= self.probability <= 1
+            and isfinite(self.energy_level)
+            and self.energy_level >= 0
+            and isfinite(self.frame_duration_ms)
+            and self.frame_duration_ms > 0
+            and self.normalized_error is None
+        )
+
+
+class VoiceActivityDetector(Protocol):
+    def analyze(
+        self, samples: tuple[float, ...], sample_rate: int, timestamp: float
+    ) -> VoiceActivityResult: ...
+    def reset(self) -> None: ...
+
+
+class FakeVoiceActivityDetector:
+    def __init__(self, results: tuple[VoiceActivityResult, ...] = ()) -> None:
+        self._configured = tuple(results)
+        self._results = deque(results)
+
+    def analyze(
+        self, samples: tuple[float, ...], sample_rate: int, timestamp: float
+    ) -> VoiceActivityResult:
+        return (
+            self._results.popleft()
+            if self._results
+            else VoiceActivityResult(
+                timestamp, 0.0, False, 0.0, False, len(samples) * 1000 / sample_rate
+            )
+        )
+
+    def reset(self) -> None:
+        self._results = deque(self._configured)
+
+
+class SpeechTerminationReason(StrEnum):
+    END_SILENCE = "END_SILENCE"
+    MAXIMUM_DURATION = "MAXIMUM_DURATION"
+    CANCELLED = "CANCELLED"
+    DEVICE_DISCONNECTED = "DEVICE_DISCONNECTED"
+    RUNTIME_SHUTDOWN = "RUNTIME_SHUTDOWN"
+    VAD_FAILURE = "VAD_FAILURE"
+
+
+@dataclass
+class SpeechSegment:
+    session_id: str
+    segment_id: str
+    start_timestamp: float
+    end_timestamp: float
+    sample_rate: int
+    _samples: list[float] = field(repr=False)
+    speech_frame_count: int = 0
+    silence_frame_count: int = 0
+    probabilities: list[float] = field(default_factory=list)
+    termination_reason: SpeechTerminationReason | None = None
+    prefix_duration_ms: float = 0.0
+    trailing_duration_ms: float = 0.0
+
+    @property
+    def samples(self) -> tuple[float, ...]:
+        """Read-only immediate-consumer view; never suitable for serialization."""
+        return tuple(self._samples)
+
+    def public(self) -> dict[str, object]:
+        return {
+            "session_id": self.session_id,
+            "segment_id": self.segment_id,
+            "duration_seconds": self.end_timestamp - self.start_timestamp,
+            "sample_rate": self.sample_rate,
+            "total_samples": len(self._samples),
+            "speech_frame_count": self.speech_frame_count,
+            "silence_frame_count": self.silence_frame_count,
+            "termination_reason": self.termination_reason,
+            "average_probability": sum(self.probabilities) / len(self.probabilities)
+            if self.probabilities
+            else 0.0,
+            "maximum_probability": max(self.probabilities, default=0.0),
+            "prefix_duration_ms": self.prefix_duration_ms,
+            "trailing_duration_ms": self.trailing_duration_ms,
+            "verification_state": "VERIFIED",
+        }
+
+    def clear_samples(self) -> None:
+        self._samples.clear()
+
+    def clear(self) -> None:
+        self.clear_samples()
+        self.probabilities.clear()
+
+
+class SpeechSegmentController:
+    """Bounded VAD+energy segmenter.  It deliberately knows nothing about devices or models."""
+
+    _allowed: ClassVar[dict[VoiceActivityState, frozenset[VoiceActivityState]]] = {
+        VoiceActivityState.IDLE: frozenset({VoiceActivityState.CANDIDATE}),
+        VoiceActivityState.CANDIDATE: frozenset(
+            {VoiceActivityState.IDLE, VoiceActivityState.SPEAKING}
+        ),
+        VoiceActivityState.SPEAKING: frozenset({VoiceActivityState.ENDING}),
+        VoiceActivityState.ENDING: frozenset(
+            {VoiceActivityState.SPEAKING, VoiceActivityState.IDLE}
+        ),
+        VoiceActivityState.CANCELLED: frozenset({VoiceActivityState.IDLE}),
+        VoiceActivityState.FAILED: frozenset({VoiceActivityState.IDLE}),
+    }
+
+    def __init__(
+        self,
+        config: VadConfiguration,
+        gate: float | None = None,
+        profile: AmbientNoiseProfile | None = None,
+        detector: VoiceActivityDetector | None = None,
+    ) -> None:
+        self.config = config
+        proposed = (
+            profile.recommended_energy_gate
+            if profile and profile.verification_state == "VERIFIED"
+            else gate
+        )
+        self.gate = max(config.minimum_energy_floor, proposed or config.minimum_energy_floor)
+        self.detector = detector
+        self.state = VoiceActivityState.IDLE
+        self._prefix: deque[AudioFrame] = deque()
+        self._candidate: list[tuple[AudioFrame, VoiceActivityResult]] = []
+        self._segment: SpeechSegment | None = None
+        self._silence_ms = 0.0
+        self._trailing: list[AudioFrame] = []
+        self.events: list[dict[str, object]] = []
+
+    @property
+    def maximum_retained_samples(self) -> int:
+        return self.config.sample_rate * self.config.maximum_utterance_seconds + (
+            self.config.sample_rate
+            * (self.config.prefix_padding_ms + self.config.trailing_padding_ms)
+            // 1000
+        )
+
+    def _duration(self, frame: AudioFrame) -> float:
+        return len(frame.samples) * 1000 / self.config.sample_rate
+
+    def _valid_frame(self, frame: AudioFrame, activity: VoiceActivityResult) -> bool:
+        return (
+            bool(frame.samples)
+            and len(frame.samples)
+            <= self.config.sample_rate * self.config.maximum_utterance_seconds
+            and all(isfinite(x) for x in frame.samples)
+            and activity.valid()
+            and abs(self._duration(frame) - activity.frame_duration_ms) < 1.0
+        )
+
+    def _speech(self, frame: AudioFrame, activity: VoiceActivityResult) -> bool:
+        return (
+            self._valid_frame(frame, activity)
+            and activity.is_speech
+            and activity.energy_gate_passed
+            and activity.energy_level >= self.gate
+            and activity.probability >= self.config.speech_threshold
+        )
+
+    def _emit(self, event_type: str, **payload: object) -> None:
+        # Metadata only: frames, samples, native errors, and detector objects never cross this boundary.
+        self.events.append({"event_type": event_type, **payload})
+
+    def _transition(self, next_state: VoiceActivityState) -> None:
+        if next_state not in self._allowed[self.state]:
+            raise RuntimeError("illegal speech segment transition")
+        self.state = next_state
+
+    def _append_prefix(self, frame: AudioFrame) -> None:
+        self._prefix.append(frame)
+        while (
+            sum(len(item.samples) for item in self._prefix) * 1000 / self.config.sample_rate
+            > self.config.prefix_padding_ms
+        ):
+            self._prefix.popleft()
+
+    def _finish(self, reason: SpeechTerminationReason) -> SpeechSegment | None:
+        segment = self._segment
+        if segment is None:
+            self.reset()
+            return None
+        segment.termination_reason = reason
+        self._emit("voice.speech.stopped", **segment.public())
+        self.reset()
+        return segment
+
+    def process(
+        self, frame: AudioFrame, activity: VoiceActivityResult, session_id: str
+    ) -> SpeechSegment | None:
+        if self.state in {VoiceActivityState.CANCELLED, VoiceActivityState.FAILED}:
+            raise RuntimeError("controller must be reset before reuse")
+        valid = self._speech(frame, activity)
+        if not self._valid_frame(frame, activity):
+            self._emit("voice.vad.error", normalized_error="MALFORMED_FRAME")
+            valid = False
+        if self.state == VoiceActivityState.IDLE:
+            if valid:
+                self._transition(VoiceActivityState.CANDIDATE)
+                self._candidate = [(frame, activity)]
+                self._emit("voice.speech.candidate", session_id=session_id)
+            else:
+                self._append_prefix(frame)
+            return None
+        if self.state == VoiceActivityState.CANDIDATE:
+            if not valid:
+                self._candidate.clear()
+                self._transition(VoiceActivityState.IDLE)
+                self._emit("voice.speech.rejected", normalized_error="INSUFFICIENT_SPEECH")
+                self._append_prefix(frame)
+                return None
+            self._candidate.append((frame, activity))
+            speech_ms = sum(self._duration(item[0]) for item in self._candidate)
+            if speech_ms < self.config.minimum_speech_ms:
+                return None
+            candidate_frames = [item[0] for item in self._candidate]
+            prefix = list(self._prefix)
+            samples = [value for item in prefix + candidate_frames for value in item.samples]
+            first = (prefix or candidate_frames)[0]
+            self._segment = SpeechSegment(
+                session_id,
+                str(uuid4()),
+                first.timestamp,
+                frame.timestamp,
+                self.config.sample_rate,
+                samples,
+                len(candidate_frames),
+                0,
+                [item[1].probability for item in self._candidate],
+                None,
+                sum(self._duration(item) for item in prefix),
+                0.0,
+            )
+            self._candidate.clear()
+            self._prefix.clear()
+            self._transition(VoiceActivityState.SPEAKING)
+            self._emit("voice.speech.started", **self._segment.public())
+            return None
+        assert self._segment is not None
+        if valid:
+            if self.state == VoiceActivityState.ENDING:
+                self._trailing.clear()
+                self._silence_ms = 0.0
+                self._transition(VoiceActivityState.SPEAKING)
+            self._segment._samples.extend(frame.samples)
+            self._segment.end_timestamp = frame.timestamp
+            self._segment.speech_frame_count += 1
+            self._segment.probabilities.append(activity.probability)
+        else:
+            if self.state == VoiceActivityState.SPEAKING:
+                self._transition(VoiceActivityState.ENDING)
+            self._trailing.append(frame)
+            self._silence_ms += self._duration(frame)
+            trailing_limit = self.config.sample_rate * self.config.trailing_padding_ms // 1000
+            while sum(len(item.samples) for item in self._trailing) > trailing_limit:
+                self._trailing.pop(0)
+            if self._silence_ms >= self.config.minimum_silence_ms:
+                for item in self._trailing:
+                    self._segment._samples.extend(item.samples)
+                self._segment.trailing_duration_ms = sum(
+                    self._duration(item) for item in self._trailing
+                )
+                self._segment.silence_frame_count += len(self._trailing)
+                self._segment.end_timestamp = frame.timestamp
+                return self._finish(SpeechTerminationReason.END_SILENCE)
+        if (
+            len(self._segment._samples)
+            >= self.config.sample_rate * self.config.maximum_utterance_seconds
+        ):
+            self._segment._samples = self._segment._samples[
+                : self.config.sample_rate * self.config.maximum_utterance_seconds
+            ]
+            return self._finish(SpeechTerminationReason.MAXIMUM_DURATION)
+        return None
+
+    def _terminal(self, reason: SpeechTerminationReason) -> SpeechSegment | None:
+        active = self._segment is not None
+        self.state = (
+            VoiceActivityState.CANCELLED
+            if reason == SpeechTerminationReason.CANCELLED
+            else VoiceActivityState.FAILED
+        )
+        result = self._finish(reason) if active else None
+        if not active:
+            self._candidate.clear()
+            self._prefix.clear()
+            self._trailing.clear()
+            self._emit("voice.speech.rejected", normalized_error=reason)
+            self.reset()
+        return result
+
+    def cancel(self) -> SpeechSegment | None:
+        return self._terminal(SpeechTerminationReason.CANCELLED)
+
+    def device_disconnected(self) -> SpeechSegment | None:
+        return self._terminal(SpeechTerminationReason.DEVICE_DISCONNECTED)
+
+    def runtime_shutdown(self) -> SpeechSegment | None:
+        return self._terminal(SpeechTerminationReason.RUNTIME_SHUTDOWN)
+
+    def vad_failure(self) -> SpeechSegment | None:
+        self._emit("voice.vad.error", normalized_error="VAD_FAILURE")
+        return self._terminal(SpeechTerminationReason.VAD_FAILURE)
+
+    def calibrate(
+        self,
+        estimator: AmbientNoiseEstimator,
+        device_selector: str,
+        frames: tuple[AudioFrame, ...],
+        requested_duration_seconds: float,
+    ) -> AmbientNoiseProfile:
+        self._emit("voice.calibration.started", device_selector=device_selector)
+        profile = estimator.profile(
+            device_selector,
+            frames,
+            self.config.minimum_energy_floor,
+            requested_duration_seconds,
+            self.config.sample_rate,
+        )
+        self._emit(
+            "voice.calibration.completed"
+            if profile.verification_state == "VERIFIED"
+            else "voice.calibration.failed",
+            device_selector=device_selector,
+            verification_state=profile.verification_state,
+            normalized_error=profile.normalized_error,
+        )
+        if profile.verification_state == "VERIFIED":
+            self.gate = max(self.config.minimum_energy_floor, profile.recommended_energy_gate)
+        return profile
+
+    def reset(self) -> None:
+        self.state = VoiceActivityState.IDLE
+        self._candidate.clear()
+        self._prefix.clear()
+        self._trailing.clear()
+        self._segment = None
+        self._silence_ms = 0.0
+        if self.detector:
+            self.detector.reset()
+
+
+@dataclass(frozen=True)
+class AmbientNoiseProfile:
+    device_selector: str
+    requested_duration_seconds: float
+    observed_duration_seconds: float
+    frame_count: int
+    total_samples: int
+    mean_rms: float
+    median_rms: float
+    percentile_90_rms: float
+    percentile_95_rms: float
+    maximum_peak: float
+    estimated_noise_floor: float
+    recommended_energy_gate: float
+    speech_contamination_ratio: float
+    confidence: float
+    calibration_timestamp: datetime
+    verification_state: str
+    normalized_error: str | None = None
+    retryable: bool = False
+
+    # Earlier scaffold names remain read-only conveniences.
+    @property
+    def duration_seconds(self) -> float:
+        return self.observed_duration_seconds
+
+    @property
+    def rms_mean(self) -> float:
+        return self.mean_rms
+
+    @property
+    def rms_p95(self) -> float:
+        return self.percentile_95_rms
+
+    @property
+    def peak_level(self) -> float:
+        return self.maximum_peak
+
+    @property
+    def timestamp(self) -> datetime:
+        return self.calibration_timestamp
+
+
+class AmbientNoiseEstimator:
+    """A bounded reservoir (default 256 RMS values), not raw calibration audio."""
+
+    def __init__(self, reservoir_capacity: int = 256) -> None:
+        self.reservoir_capacity = reservoir_capacity
+        self._values: deque[float] = deque(maxlen=reservoir_capacity)
+
+    @property
+    def retained_count(self) -> int:
+        return len(self._values)
+
+    def reset(self) -> None:
+        self._values.clear()
+
+    def profile(
+        self,
+        device_selector: str,
+        frames: tuple[AudioFrame, ...],
+        minimum_gate: float,
+        requested_duration_seconds: float | None = None,
+        sample_rate: int = 16000,
+    ) -> AmbientNoiseProfile:
+        self.reset()
+        total = 0
+        peak = 0.0
+        malformed = False
+        contamination = 0
+        for frame in frames:
+            if not frame.samples or not all(isfinite(value) for value in frame.samples):
+                malformed = True
+                continue
+            rms = sqrt(sum(value * value for value in frame.samples) / len(frame.samples))
+            self._values.append(rms)
+            total += len(frame.samples)
+            peak = max(peak, max(abs(x) for x in frame.samples))
+            contamination += int(rms >= max(minimum_gate * 3, 0.1))
+        values = sorted(self._values)
+        observed = total / sample_rate
+        requested = (
+            requested_duration_seconds if requested_duration_seconds is not None else observed
+        )
+        error = (
+            "MALFORMED_SAMPLES"
+            if malformed
+            else "NO_USABLE_FRAMES"
+            if not values
+            else "INSUFFICIENT_FRAMES"
+            if len(values) < 3
+            else "INSUFFICIENT_DURATION"
+            if observed < min(requested, 0.1)
+            else "SPEECH_CONTAMINATION"
+            if contamination / max(len(values), 1) > 0.2
+            else None
+        )
+
+        def percentile(p: float) -> float:
+            return values[min(len(values) - 1, int(p * (len(values) - 1)))] if values else 0.0
+
+        p95 = percentile(0.95)
+        return AmbientNoiseProfile(
+            device_selector,
+            requested,
+            observed,
+            len(values),
+            total,
+            sum(values) / len(values) if values else 0.0,
+            percentile(0.5),
+            percentile(0.9),
+            p95,
+            peak,
+            min(values) if values else 0.0,
+            max(minimum_gate, p95 * 1.5),
+            contamination / max(len(values), 1),
+            1.0 if error is None else 0.0,
+            datetime.now(UTC),
+            "VERIFIED" if error is None else "UNVERIFIED",
+            error,
+            error is not None,
+        )
 
 
 class DeviceDisconnectedError(RuntimeError):
@@ -280,11 +810,6 @@ class AudioInputAdapter(Protocol):
     def stop(self) -> None: ...
 
 
-class VoiceActivityDetector(Protocol):
-    def is_speech(self, frame: AudioFrame) -> bool: ...
-    def reset(self) -> None: ...
-
-
 class WakeWordEngine(Protocol):
     def detect(self, frames: tuple[AudioFrame, ...], session_id: str) -> WakeDetection | None: ...
 
@@ -325,6 +850,19 @@ class FakeVad:
 
     def is_speech(self, frame: AudioFrame) -> bool:
         return self.speech
+
+    def analyze(
+        self, samples: tuple[float, ...], sample_rate: int, timestamp: float
+    ) -> VoiceActivityResult:
+        energy = sqrt(sum(value * value for value in samples) / len(samples)) if samples else 0.0
+        return VoiceActivityResult(
+            timestamp,
+            float(self.speech),
+            self.speech,
+            energy,
+            self.speech,
+            len(samples) * 1000 / sample_rate,
+        )
 
     def reset(self) -> None:
         pass

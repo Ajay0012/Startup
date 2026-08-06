@@ -169,7 +169,8 @@ class ApplicationRecord:
     process_names: tuple[str, ...] = ()
     window_classes: tuple[str, ...] = ()
     discovered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    last_seen_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Refresh evidence is intentionally volatile and must not alter record identity/equality.
+    last_seen_at: datetime = field(default_factory=lambda: datetime.now(UTC), compare=False)
     confidence: float = 0.5
     stale: bool = False
     source_evidence: tuple[dict[str, str], ...] = ()

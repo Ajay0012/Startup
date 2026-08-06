@@ -5,6 +5,8 @@ import pytest
 from pangu.events import EventBus
 from pangu.language import LanguageRuntime
 from pangu.voice import (
+    AmbientNoiseEstimator,
+    AudioFrame,
     AudioDevice,
     DeviceDisconnectedError,
     FakeAudioInputAdapter,
@@ -14,9 +16,131 @@ from pangu.voice import (
     FakeWakeWordEngine,
     VoiceCaptureRequest,
     VoiceConfig,
+    VadConfiguration,
+    VoiceActivityResult,
+    VoiceActivityState,
+    SpeechSegmentController,
+    SpeechTerminationReason,
     VoiceSessionRuntime,
     VoiceState,
 )
+
+
+def vad(speech: bool = True, probability: float = 1.0, energy: float = 0.2) -> VoiceActivityResult:
+    return VoiceActivityResult(0.0, probability, speech, energy, energy >= 0.01, 100.0)
+
+
+def frame(sequence: int, value: float = 0.2) -> AudioFrame:
+    return AudioFrame((value,) * 1600, sequence / 10, sequence)
+
+
+def controller(**kwargs: object) -> SpeechSegmentController:
+    return SpeechSegmentController(
+        VadConfiguration(minimum_speech_ms=200, minimum_silence_ms=300, **kwargs)
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("speech_threshold", 0.0),
+        ("speech_threshold", float("nan")),
+        ("speech_threshold", float("inf")),
+        ("minimum_speech_ms", 0),
+        ("maximum_utterance_seconds", 0),
+        ("minimum_energy_floor", float("nan")),
+        ("minimum_energy_floor", float("inf")),
+    ],
+)
+def test_vad_configuration_rejects_invalid_values(field, value) -> None:
+    with pytest.raises(ValueError):
+        VadConfiguration(**{field: value})
+
+
+def test_fake_detector_reset_replays_results() -> None:
+    from pangu.voice import FakeVoiceActivityDetector
+
+    item = vad()
+    fake = FakeVoiceActivityDetector((item,))
+    assert fake.analyze((), 16000, 0) == item
+    fake.reset()
+    assert fake.analyze((), 16000, 0) == item
+
+
+def test_calibration_is_bounded_and_safe() -> None:
+    estimator = AmbientNoiseEstimator(3)
+    profile = estimator.profile("fake", tuple(frame(i, 0.02) for i in range(10)), 0.01)
+    assert profile.verification_state == "VERIFIED"
+    assert profile.recommended_energy_gate >= 0.01 and profile.percentile_95_rms > 0
+    assert estimator.retained_count == 3
+    estimator.reset()
+    assert estimator.retained_count == 0
+
+
+def test_calibration_rejects_malformed_and_contaminated() -> None:
+    estimator = AmbientNoiseEstimator()
+    bad = estimator.profile("fake", (AudioFrame((float("nan"),), 0),), 0.01)
+    assert bad.verification_state == "UNVERIFIED"
+    loud = estimator.profile("fake", tuple(frame(i, 0.9) for i in range(3)), 0.01)
+    assert loud.normalized_error == "SPEECH_CONTAMINATION"
+
+
+@pytest.mark.parametrize(
+    "activity",
+    [vad(True, 0.49), vad(True, 1, 0.001), vad(False, 1, 0.2), vad(True, float("nan"), 0.2)],
+)
+def test_invalid_vad_combinations_do_not_start_speech(activity) -> None:
+    item = controller()
+    item.process(frame(0), activity, "s")
+    assert item.state == VoiceActivityState.IDLE
+
+
+def test_segment_prefix_pause_trailing_and_privacy() -> None:
+    item = controller(prefix_padding_ms=200, trailing_padding_ms=100)
+    item.process(frame(0, 0.001), vad(False, 0, 0.001), "s")
+    item.process(frame(1), vad(), "s")
+    item.process(frame(2), vad(), "s")
+    assert item.state == VoiceActivityState.SPEAKING
+    item.process(frame(3, 0.001), vad(False, 0, 0.001), "s")
+    assert item.state == VoiceActivityState.ENDING
+    item.process(frame(4), vad(), "s")
+    assert item.state == VoiceActivityState.SPEAKING
+    item.process(frame(5, 0.001), vad(False, 0, 0.001), "s")
+    item.process(frame(6, 0.001), vad(False, 0, 0.001), "s")
+    result = item.process(frame(7, 0.001), vad(False, 0, 0.001), "s")
+    assert result and result.termination_reason == SpeechTerminationReason.END_SILENCE
+    assert result.prefix_duration_ms == 100 and result.trailing_duration_ms == 100
+    assert "samples" not in result.public() and "0.2" not in repr(result)
+    result.clear_samples()
+    assert not result.samples and result.public()["total_samples"] == 0
+
+
+def test_short_candidate_and_terminal_paths_are_reusable() -> None:
+    item = controller()
+    item.process(frame(0), vad(), "one")
+    item.process(frame(1, 0.001), vad(False, 0, 0.001), "one")
+    assert item.state == VoiceActivityState.IDLE
+    item.process(frame(2), vad(), "two")
+    item.process(frame(3), vad(), "two")
+    result = item.cancel()
+    assert result and result.termination_reason == SpeechTerminationReason.CANCELLED
+    assert item.state == VoiceActivityState.IDLE
+    item.process(frame(4), vad(), "three")
+    item.process(frame(5), vad(), "three")
+    assert (
+        item.device_disconnected().termination_reason == SpeechTerminationReason.DEVICE_DISCONNECTED
+    )
+
+
+def test_maximum_duration_is_hard_bound() -> None:
+    item = SpeechSegmentController(
+        VadConfiguration(minimum_speech_ms=100, maximum_utterance_seconds=1)
+    )
+    result = None
+    for sequence in range(20):
+        result = item.process(frame(sequence), vad(), "s") or result
+    assert result and result.termination_reason == SpeechTerminationReason.MAXIMUM_DURATION
+    assert len(result.samples) <= 16000 and item.state == VoiceActivityState.IDLE
 
 
 def test_fake_voice_runtime_start_stop() -> None:
