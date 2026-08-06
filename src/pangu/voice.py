@@ -190,6 +190,7 @@ class SpeechSegment:
     speech_frame_count: int = 0
     silence_frame_count: int = 0
     probabilities: list[float] = field(default_factory=list)
+    decision_source: VadDecisionSource = VadDecisionSource.PROBABILITY
     termination_reason: SpeechTerminationReason | None = None
     prefix_duration_ms: float = 0.0
     trailing_duration_ms: float = 0.0
@@ -200,19 +201,25 @@ class SpeechSegment:
         return tuple(self._samples)
 
     def public(self) -> dict[str, object]:
+        total_samples = len(self._samples)
+        audio_duration = total_samples / self.sample_rate
+        average = sum(self.probabilities) / len(self.probabilities) if self.probabilities else None
+        maximum = max(self.probabilities) if self.probabilities else None
         return {
             "session_id": self.session_id,
             "segment_id": self.segment_id,
-            "duration_seconds": self.end_timestamp - self.start_timestamp,
+            # Retained audio includes prefix/trailing frames; duration_seconds is audio duration.
+            "duration_seconds": audio_duration,
+            "audio_duration_seconds": audio_duration,
+            "elapsed_duration_seconds": self.end_timestamp - self.start_timestamp,
             "sample_rate": self.sample_rate,
-            "total_samples": len(self._samples),
+            "total_samples": total_samples,
             "speech_frame_count": self.speech_frame_count,
             "silence_frame_count": self.silence_frame_count,
             "termination_reason": self.termination_reason,
-            "average_probability": sum(self.probabilities) / len(self.probabilities)
-            if self.probabilities
-            else 0.0,
-            "maximum_probability": max(self.probabilities, default=0.0),
+            "average_probability": average,
+            "maximum_probability": maximum,
+            "decision_source": self.decision_source,
             "prefix_duration_ms": self.prefix_duration_ms,
             "trailing_duration_ms": self.trailing_duration_ms,
             "verification_state": "VERIFIED",
@@ -227,7 +234,12 @@ class SpeechSegment:
 
 
 class SpeechSegmentController:
-    """Bounded VAD+energy segmenter.  It deliberately knows nothing about devices or models."""
+    """Bounded VAD+energy segmenter.
+
+    A candidate starts only on an IDLE -> CANDIDATE transition.  It remains one
+    candidate through SPEAKING/ENDING resumption and is either accepted as one
+    emitted segment, rejected before speech qualification, or unfinished at EOF.
+    """
 
     _allowed: ClassVar[dict[VoiceActivityState, frozenset[VoiceActivityState]]] = {
         VoiceActivityState.IDLE: frozenset({VoiceActivityState.CANDIDATE}),
@@ -264,6 +276,9 @@ class SpeechSegmentController:
         self._silence_ms = 0.0
         self._trailing: list[AudioFrame] = []
         self.events: list[dict[str, object]] = []
+        self.candidate_start_count = 0
+        self.rejected_candidate_count = 0
+        self.unfinished_candidate_count = 0
 
     @property
     def maximum_retained_samples(self) -> int:
@@ -332,6 +347,7 @@ class SpeechSegmentController:
         if self.state == VoiceActivityState.IDLE:
             if valid:
                 self._transition(VoiceActivityState.CANDIDATE)
+                self.candidate_start_count += 1
                 self._candidate = [(frame, activity)]
                 self._emit("voice.speech.candidate", session_id=session_id)
             else:
@@ -340,6 +356,7 @@ class SpeechSegmentController:
         if self.state == VoiceActivityState.CANDIDATE:
             if not valid:
                 self._candidate.clear()
+                self.rejected_candidate_count += 1
                 self._transition(VoiceActivityState.IDLE)
                 self._emit("voice.speech.rejected", normalized_error="INSUFFICIENT_SPEECH")
                 self._append_prefix(frame)
@@ -366,6 +383,7 @@ class SpeechSegmentController:
                     for item in self._candidate
                     if item[1].probability is not None
                 ],
+                activity.decision_source,
                 None,
                 sum(self._duration(item) for item in prefix),
                 0.0,
@@ -444,6 +462,12 @@ class SpeechSegmentController:
 
     def end_of_file(self) -> SpeechSegment | None:
         """Terminate a file-backed segment without treating EOF as a device failure."""
+        if self.state == VoiceActivityState.CANDIDATE:
+            self._candidate.clear()
+            self.rejected_candidate_count += 1
+            self._emit("voice.speech.rejected", normalized_error="INSUFFICIENT_SPEECH")
+            self.reset()
+            return None
         return self._finish(SpeechTerminationReason.END_OF_FILE)
 
     def calibrate(
@@ -1476,6 +1500,7 @@ class VadFileInferenceResult:
     speech_candidate_count: int = 0
     accepted_segment_count: int = 0
     rejected_candidate_count: int = 0
+    unfinished_candidate_count: int = 0
     segments: tuple[dict[str, object], ...] = ()
     detector_name: str = "unknown"
     detector_reset_before: bool = False
@@ -1523,6 +1548,56 @@ class VadFileInferenceService:
             controller_factory,
             config,
         )
+
+    @staticmethod
+    def _metadata_is_valid(
+        segments: tuple[dict[str, object], ...],
+        processed_windows: int,
+        candidates: int,
+        accepted: int,
+        rejected: int,
+        unfinished: int,
+        average: float | None,
+        maximum: float | None,
+        cleaned: bool,
+    ) -> bool:
+        if (
+            processed_windows <= 0
+            or accepted > candidates
+            or rejected > candidates
+            or candidates != accepted + rejected + unfinished
+            or not cleaned
+            or any(value is not None and not isfinite(value) for value in (average, maximum))
+        ):
+            return False
+        for segment in segments:
+            total = segment.get("total_samples")
+            rate = segment.get("sample_rate")
+            duration = segment.get("audio_duration_seconds")
+            legacy_duration = segment.get("duration_seconds")
+            average_probability = segment.get("average_probability")
+            maximum_probability = segment.get("maximum_probability")
+            source = segment.get("decision_source")
+            if (
+                not isinstance(total, int)
+                or total < 0
+                or not isinstance(rate, int)
+                or rate <= 0
+                or not isinstance(duration, float)
+                or not isinstance(legacy_duration, float)
+                or abs(duration - total / rate) > 1 / rate
+                or abs(legacy_duration - total / rate) > 1 / rate
+                or any(
+                    value is not None and (not isinstance(value, float) or not isfinite(value))
+                    for value in (average_probability, maximum_probability)
+                )
+                or (
+                    source == VadDecisionSource.AUTHORITATIVE_BACKEND
+                    and (average_probability is not None or maximum_probability is not None)
+                )
+            ):
+                return False
+        return True
 
     def infer(self, path: Path) -> VadFileInferenceResult:
         decoded = self.decoder.decode(path)
@@ -1608,17 +1683,35 @@ class VadFileInferenceService:
             error = error or "VAD_CLEANUP_UNVERIFIED"
         if error is None and meta.normalized_sample_count and not processed_windows:
             error = "VAD_INFERENCE_UNVERIFIED"
+        average = sum(probabilities) / len(probabilities) if probabilities else None
+        maximum = max(probabilities) if probabilities else None
+        candidates = controller.candidate_start_count
+        rejected = controller.rejected_candidate_count
+        unfinished = controller.unfinished_candidate_count
+        if error is None and not self._metadata_is_valid(
+            safe,
+            processed_windows,
+            candidates,
+            len(safe),
+            rejected,
+            unfinished,
+            average,
+            maximum,
+            cleaned,
+        ):
+            error = "VAD_METADATA_INVALID"
         return VadFileInferenceResult(
             **cast(Any, common),
             processed_window_count=processed_windows,
             padded_sample_count=padded,
-            average_vad_probability=sum(probabilities) / len(probabilities)
-            if probabilities
-            else None,
-            maximum_vad_probability=max(probabilities) if probabilities else None,
+            average_vad_probability=average,
+            maximum_vad_probability=maximum,
             vad_positive_frame_count=vad_positive,
             energy_gate_positive_frame_count=energy_positive,
+            speech_candidate_count=candidates,
             accepted_segment_count=len(safe),
+            rejected_candidate_count=rejected,
+            unfinished_candidate_count=unfinished,
             segments=safe,
             detector_reset_before=before,
             detector_reset_after=after,

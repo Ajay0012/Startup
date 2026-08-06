@@ -21,11 +21,13 @@ from pangu.voice import (
     FakeWakeWordEngine,
     SherpaOnnxSileroVadAdapter,
     SileroVadModelManifest,
+    SpeechSegment,
     SpeechSegmentController,
     SpeechTerminationReason,
     UnavailableVoiceActivityDetector,
     VadActivationService,
     VadConfiguration,
+    VadDecisionSource,
     VadDetectorResetError,
     VadFileInferenceService,
     VadModelStatus,
@@ -87,6 +89,12 @@ def native_result(
     native: ExactSherpaNative, samples: tuple[float, ...] | None = None
 ) -> VoiceActivityResult:
     return sherpa_adapter(native).analyze(samples or (0.2,) * 512, 16000, 0.0)
+
+
+def window_vad(
+    speech: bool = True, probability: float = 1.0, energy: float = 0.2
+) -> VoiceActivityResult:
+    return VoiceActivityResult(0.0, probability, speech, energy, energy >= 0.01, 32.0)
 
 
 def test_sherpa_native_accept_waveform_receives_samples_only() -> None:
@@ -352,6 +360,181 @@ def test_partial_activation_closes_candidate_native_state(
     service = VadActivationService(tmp_path, manifest_path)
     assert isinstance(service.activate(), UnavailableVoiceActivityDetector)
     assert PartiallyActivatedAdapter.closed
+
+
+def test_authoritative_candidate_start_increments_count(tmp_path: Path) -> None:
+    path = tmp_path / "authoritative-candidate.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(True)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.speech_candidate_count == 1
+    assert result.speech_candidate_count >= result.accepted_segment_count
+
+
+def test_two_accepted_segments_report_at_least_two_candidates(tmp_path: Path) -> None:
+    path = tmp_path / "two-segments.wav"
+    write_wav(path, 16000, 1, 3072)
+    config = VadConfiguration(minimum_speech_ms=32, minimum_silence_ms=32)
+    sequence = (
+        window_vad(True, 0.8),
+        window_vad(True, 0.8),
+        window_vad(False, 0.1),
+        window_vad(True, 0.8),
+        window_vad(True, 0.8),
+        window_vad(False, 0.1),
+    )
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        FakeVoiceActivityDetector(sequence),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.accepted_segment_count == 2
+    assert result.speech_candidate_count >= 2
+
+
+def test_resumed_ending_state_does_not_start_a_duplicate_candidate() -> None:
+    item = SpeechSegmentController(VadConfiguration(minimum_speech_ms=32, minimum_silence_ms=64))
+    item.process(AudioFrame((0.2,) * 512, 0, 0), window_vad(True, 0.8), "session")
+    item.process(AudioFrame((0.2,) * 512, 0.032, 1), window_vad(True, 0.8), "session")
+    item.process(AudioFrame((0.0,) * 512, 0.064, 2), window_vad(False, 0.1, 0.0), "session")
+    item.process(AudioFrame((0.2,) * 512, 0.096, 3), window_vad(True, 0.8), "session")
+    assert item.candidate_start_count == 1
+
+
+def test_rejected_short_candidate_increments_candidate_and_rejected_counts(tmp_path: Path) -> None:
+    path = tmp_path / "short-candidate.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=96)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        FakeVoiceActivityDetector((window_vad(True, 0.8), window_vad(False, 0.1))),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.speech_candidate_count == result.rejected_candidate_count == 1
+
+
+def test_probability_detector_segment_probability_metadata_is_numeric(tmp_path: Path) -> None:
+    path = tmp_path / "probability-segment.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        FakeVoiceActivityDetector((window_vad(True, 0.7), window_vad(True, 0.9))),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    segment = result.segments[0]
+    assert segment["average_probability"] == pytest.approx(0.8)
+    assert segment["maximum_probability"] == 0.9
+
+
+def test_authoritative_segment_probability_metadata_is_null(tmp_path: Path) -> None:
+    path = tmp_path / "null-probability-segment.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(True)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.segments[0]["average_probability"] is None
+    assert result.segments[0]["maximum_probability"] is None
+
+
+def test_none_probabilities_are_not_fabricated_as_zero(tmp_path: Path) -> None:
+    path = tmp_path / "no-fabricated-probability.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(True)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.average_vad_probability is None
+    assert result.segments[0]["average_probability"] is None
+
+
+def test_segment_audio_duration_matches_retained_sample_count(tmp_path: Path) -> None:
+    path = tmp_path / "duration.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        FakeVoiceActivityDetector((window_vad(True, 0.8), window_vad(True, 0.8))),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    segment = result.segments[0]
+    assert segment["audio_duration_seconds"] == segment["total_samples"] / segment["sample_rate"]
+    assert segment["duration_seconds"] == segment["audio_duration_seconds"]
+
+
+def test_elapsed_duration_is_separate_from_audio_duration() -> None:
+    segment = SpeechSegment("s", "id", 1.0, 3.0, 16000, [0.2] * 512)
+    metadata = segment.public()
+    assert metadata["audio_duration_seconds"] == 512 / 16000
+    assert metadata["elapsed_duration_seconds"] == 2.0
+
+
+def test_inconsistent_segment_metadata_cannot_be_verified() -> None:
+    invalid = (
+        {
+            "total_samples": 512,
+            "sample_rate": 16000,
+            "audio_duration_seconds": 9.0,
+            "duration_seconds": 9.0,
+            "average_probability": None,
+            "maximum_probability": None,
+            "decision_source": VadDecisionSource.AUTHORITATIVE_BACKEND,
+        },
+    )
+    assert not VadFileInferenceService._metadata_is_valid(invalid, 1, 1, 1, 0, 0, None, None, True)
+
+
+def test_metadata_invariant_failure_returns_typed_unverified_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "invalid-metadata.wav"
+    write_wav(path, 16000, 1, 1024)
+    original_public = SpeechSegment.public
+
+    def inconsistent_public(segment: SpeechSegment) -> dict[str, object]:
+        metadata = original_public(segment)
+        metadata["duration_seconds"] = 99.0
+        return metadata
+
+    monkeypatch.setattr(SpeechSegment, "public", inconsistent_public)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(True)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.verification_state == "UNVERIFIED"
+    assert result.normalized_error == "VAD_METADATA_INVALID"
+
+
+def test_public_file_result_contains_no_raw_samples_after_metadata_repair(tmp_path: Path) -> None:
+    path = tmp_path / "public-safe.wav"
+    write_wav(path, 16000, 1, 1024)
+    config = VadConfiguration(minimum_speech_ms=32)
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        sherpa_adapter(ExactSherpaNative(True)),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert_public_payload_safe(result.public())
 
 
 def assert_public_payload_safe(value: object) -> None:
