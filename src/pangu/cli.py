@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict
-from typing import cast
+from typing import Any, cast
 
 from .applications import (
     ApplicationOperationResult,
@@ -41,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--display")
     parser.add_argument("--device")
     parser.add_argument("--seconds", type=int, default=5)
+    parser.add_argument("--vad-threshold", type=float)
+    parser.add_argument("--energy-gate", type=float)
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--name")
     parser.add_argument("--source")
@@ -68,7 +70,9 @@ async def run_command(args: argparse.Namespace) -> int:
     container = RuntimeBuilder(resolve_application_root()).build()
     runtime = container.runtime
     try:
-        await runtime.start_async()
+        file_action = args.command == "voice" and args.text == "vad-file-test"
+        if not file_action:
+            await runtime.start_async()
         text = args.text or ""
         exit_code = 0
         if args.command == "health":
@@ -214,6 +218,15 @@ async def run_command(args: argparse.Namespace) -> int:
                 exit_code = _voice_exit_code(discovery.normalized_error)
             elif action == "diagnostics":
                 result = runtime.voice.diagnostics().__dict__
+                vad = cast(object, getattr(runtime.voice, "vad", None))
+                if hasattr(vad, "diagnostics"):
+                    result.update(cast(dict[str, object], cast(Any, vad).diagnostics()))
+            elif action == "vad-model-status":
+                vad = cast(object, getattr(runtime.voice, "vad", None))
+                if not hasattr(vad, "diagnostics"):
+                    raise ValueError("VAD model diagnostics unavailable")
+                result = cast(dict[str, object], cast(Any, vad).diagnostics())
+                exit_code = _voice_exit_code(str(result["vad_model_status"]))
             elif action == "capture-test":
                 if not 1 <= args.seconds <= 30:
                     raise ValueError("--seconds must be between 1 and 30")
@@ -224,8 +237,49 @@ async def run_command(args: argparse.Namespace) -> int:
                 )
                 result = asdict(capture)
                 exit_code = _voice_exit_code(capture.normalized_error, capture.verification_state)
+            elif action == "vad-file-test":
+                if not args.apps_action:
+                    raise ValueError("vad-file-test requires a WAV file")
+                if args.vad_threshold is not None and not 0 < args.vad_threshold <= 1:
+                    raise ValueError("--vad-threshold must be between 0 and 1")
+                from pathlib import Path
+                from .voice import (
+                    BoundedWaveDecoder,
+                    VadConfiguration,
+                    VadFileInferenceResult,
+                    VadFileInferenceService,
+                )
+
+                vad = cast(Any, getattr(runtime.voice, "vad", None))
+                if (
+                    vad is None
+                    or not hasattr(vad, "initialize")
+                    or vad.initialize().value != "AVAILABLE"
+                ):
+                    result = VadFileInferenceResult(
+                        sanitized_input_name=Path(args.apps_action).name,
+                        normalized_error="VAD_UNAVAILABLE",
+                    )
+                else:
+                    config = VadConfiguration(
+                        speech_threshold=args.vad_threshold or 0.5,
+                        minimum_energy_floor=args.energy_gate or 0.01,
+                    )
+                    service = VadFileInferenceService(
+                        BoundedWaveDecoder(),
+                        vad,
+                        lambda: __import__(
+                            "pangu.voice", fromlist=["SpeechSegmentController"]
+                        ).SpeechSegmentController(config, gate=args.energy_gate),
+                        config,
+                    )
+                    result = service.infer(Path(args.apps_action))
+                result = result.public()
+                exit_code = _vad_file_exit_code(result)
             else:
-                raise ValueError("voice supports devices, diagnostics, or capture-test in Phase 1A")
+                raise ValueError(
+                    "voice supports devices, diagnostics, capture-test, or vad-model-status"
+                )
         else:
             result = runtime.decide(text).__dict__
         if args.command == "apps" and action == "list" and not args.as_json:
@@ -293,7 +347,7 @@ def _system_exit_code(value: dict[str, object]) -> int:
 
 
 def _voice_exit_code(error: str | None, state: str = "VERIFIED") -> int:
-    if error in {"NO_INPUT_DEVICE", "STALE_DEVICE_SELECTOR"}:
+    if error in {"NO_INPUT_DEVICE", "STALE_DEVICE_SELECTOR", "MISSING", "INVALID_CHECKSUM"}:
         return 3
     if error == "AMBIGUOUS_DEVICE":
         return 4
@@ -301,7 +355,28 @@ def _voice_exit_code(error: str | None, state: str = "VERIFIED") -> int:
         return 6
     if error == "BACKEND_UNAVAILABLE":
         return 7
+    if error in {"LOAD_FAILED", "CLOSED"}:
+        return 6
     return 0 if state == "VERIFIED" else 8
+
+
+def _vad_file_exit_code(result: dict[str, object]) -> int:
+    error = str(result.get("normalized_error") or "")
+    if result.get("verification_state") == "VERIFIED":
+        return 0
+    if error in {"WAV_FILE_NOT_FOUND", "VAD_UNAVAILABLE"}:
+        return 3
+    if error in {"WAV_UNSUPPORTED"}:
+        return 7
+    if error in {
+        "WAV_PATH_INVALID",
+        "WAV_FORMAT_INVALID",
+        "WAV_TRUNCATED",
+        "WAV_DECODE_FAILED",
+        "VAD_INFERENCE_FAILED",
+    }:
+        return 6
+    return 8
 
 
 if __name__ == "__main__":

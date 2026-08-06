@@ -40,7 +40,8 @@ from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsS
 from .voice import (
     FakeTranscriptionProvider,
     FakeWakePhraseVerifier,
-    SherpaOnnxSileroVad,
+    SherpaOnnxSileroVadAdapter,
+    SileroVadModelManifest,
     SherpaOnnxWakeWordEngine,
     VoiceSessionRuntime,
     WindowsAudioInputAdapter,
@@ -205,9 +206,29 @@ class RuntimeBuilder:
             SafetyGateway(),
             database,
         )
+        manifest_path = (
+            Path(__file__).resolve().parents[2]
+            / "models"
+            / "voice"
+            / "vad"
+            / "silero"
+            / "v4"
+            / "manifest.json"
+        )
+        manifest = SileroVadModelManifest.load(manifest_path)
+        vad = SherpaOnnxSileroVadAdapter(
+            manifest,
+            self._root
+            / "models"
+            / "voice"
+            / "vad"
+            / "silero"
+            / manifest.version
+            / manifest.filename,
+        )
         voice = self._voice_runtime or VoiceSessionRuntime(
             WindowsAudioInputAdapter(),
-            SherpaOnnxSileroVad(),
+            vad,
             SherpaOnnxWakeWordEngine(),
             FakeWakePhraseVerifier(),
             FakeTranscriptionProvider(),

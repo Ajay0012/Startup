@@ -1,4 +1,6 @@
 import asyncio
+import wave
+from pathlib import Path
 
 import pytest
 
@@ -17,13 +19,145 @@ from pangu.voice import (
     VoiceCaptureRequest,
     VoiceConfig,
     VadConfiguration,
+    VadDetectorResetError,
     VoiceActivityResult,
     VoiceActivityState,
     SpeechSegmentController,
     SpeechTerminationReason,
     VoiceSessionRuntime,
+    BoundedWaveDecoder,
+    FakeVoiceActivityDetector,
+    VadFileInferenceService,
     VoiceState,
 )
+
+
+FORBIDDEN_AUDIO_KEYS = {"samples", "raw_audio", "audio_samples", "pcm", "waveform"}
+
+
+def assert_public_payload_safe(value: object) -> None:
+    if isinstance(value, dict):
+        assert not (FORBIDDEN_AUDIO_KEYS & set(value))
+        for child in value.values():
+            assert_public_payload_safe(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            assert_public_payload_safe(child)
+    else:
+        assert not isinstance(value, (bytes, bytearray, memoryview, BaseException))
+        assert type(value).__module__.split(".")[0] != "numpy"
+        assert not hasattr(value, "read") and not hasattr(value, "accept_waveform")
+
+
+def write_wav(path: Path, rate: int, channels: int, frames: int) -> None:
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(channels)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        output.writeframes((b"\x00\x40" * channels) * frames)
+
+
+def test_bounded_wave_decoder_downmixes_resamples_and_hides_samples(tmp_path: Path) -> None:
+    path = tmp_path / "stereo.wav"
+    write_wav(path, 44100, 2, 441)
+    result = BoundedWaveDecoder().decode(path)
+    assert result.audio and result.audio.metadata.normalized_sample_rate == 16000
+    assert result.audio.metadata.normalized_sample_count == 160
+    assert "samples" not in result.audio.public()
+    result.audio.clear_samples()
+    assert result.audio.samples_cleared and not result.audio.samples
+
+
+def test_file_inference_uses_padded_windows_and_cleans_audio(tmp_path: Path) -> None:
+    path = tmp_path / "short.wav"
+    write_wav(path, 16000, 1, 600)
+    config = VadConfiguration(minimum_speech_ms=100)
+    detector = FakeVoiceActivityDetector()
+    service = VadFileInferenceService(
+        BoundedWaveDecoder(), detector, lambda: SpeechSegmentController(config), config
+    )
+    result = service.infer(path)
+    assert result.verification_state == "VERIFIED"
+    assert result.processed_window_count == 2 and result.padded_sample_count == 424
+    assert result.decoded_samples_cleared and result.segment_samples_cleared
+    assert_public_payload_safe(result.public())
+
+
+def test_file_result_allows_safe_segment_metadata_and_no_raw_audio(tmp_path: Path) -> None:
+    path = tmp_path / "speech.wav"
+    write_wav(path, 16000, 1, 2048)
+    config = VadConfiguration(minimum_speech_ms=100)
+    detector = FakeVoiceActivityDetector(
+        tuple(VoiceActivityResult(0.0, 1.0, True, 0.2, True, 32.0) for _ in range(4))
+    )
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(), detector, lambda: SpeechSegmentController(config), config
+    ).infer(path)
+    assert result.segments and result.segment_samples_cleared and result.decoded_samples_cleared
+    assert_public_payload_safe(result.public())
+
+
+def test_file_inference_no_speech_and_duration_excludes_padding(tmp_path: Path) -> None:
+    path = tmp_path / "silence.wav"
+    write_wav(path, 16000, 1, 600)
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        FakeVoiceActivityDetector(),
+        lambda: SpeechSegmentController(config),
+        config,
+    ).infer(path)
+    assert result.verification_state == "VERIFIED" and not result.segments
+    assert result.padded_sample_count == 424 and result.normalized_duration_seconds == 600 / 16000
+
+
+def test_detector_failure_is_normalized_and_audio_is_cleared(tmp_path: Path) -> None:
+    class FailingDetector(FakeVoiceActivityDetector):
+        def analyze(self, samples, sample_rate, timestamp):
+            raise RuntimeError("private native failure")
+
+    path = tmp_path / "failure.wav"
+    write_wav(path, 16000, 1, 512)
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(), FailingDetector(), lambda: SpeechSegmentController(config), config
+    ).infer(path)
+    assert result.normalized_error == "VAD_INFERENCE_FAILED" and result.decoded_samples_cleared
+
+
+def test_detector_reset_failure_is_unverified(tmp_path: Path) -> None:
+    class ResetFailure(FakeVoiceActivityDetector):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reset_count = 0
+
+        def reset(self):
+            self.reset_count += 1
+            if self.reset_count > 1:
+                raise VadDetectorResetError()
+
+    path = tmp_path / "reset.wav"
+    write_wav(path, 16000, 1, 512)
+    config = VadConfiguration()
+    result = VadFileInferenceService(
+        BoundedWaveDecoder(), ResetFailure(), lambda: SpeechSegmentController(config), config
+    ).infer(path)
+    assert result.normalized_error == "VAD_CLEANUP_UNVERIFIED" and not result.cleanup_verified
+
+
+def test_repeated_file_inference_replays_fake_detector_state(tmp_path: Path) -> None:
+    path = tmp_path / "repeat.wav"
+    write_wav(path, 16000, 1, 512)
+    config = VadConfiguration()
+    service = VadFileInferenceService(
+        BoundedWaveDecoder(),
+        FakeVoiceActivityDetector((vad(False, 0.2),)),
+        lambda: SpeechSegmentController(config),
+        config,
+    )
+    first, second = service.infer(path), service.infer(path)
+    assert first.verification_state == second.verification_state == "VERIFIED"
+    assert first.average_vad_probability == second.average_vad_probability == 0.2
 
 
 def vad(speech: bool = True, probability: float = 1.0, energy: float = 0.2) -> VoiceActivityResult:

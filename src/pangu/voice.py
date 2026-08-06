@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import wave
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -11,6 +14,7 @@ from enum import StrEnum
 from importlib import import_module
 from math import isfinite, sqrt
 from queue import Full, Queue
+from pathlib import Path
 from threading import Event, Thread
 from typing import Any, ClassVar, Protocol, cast
 from uuid import uuid4
@@ -150,6 +154,7 @@ class SpeechTerminationReason(StrEnum):
     DEVICE_DISCONNECTED = "DEVICE_DISCONNECTED"
     RUNTIME_SHUTDOWN = "RUNTIME_SHUTDOWN"
     VAD_FAILURE = "VAD_FAILURE"
+    END_OF_FILE = "END_OF_FILE"
 
 
 @dataclass
@@ -411,6 +416,10 @@ class SpeechSegmentController:
     def vad_failure(self) -> SpeechSegment | None:
         self._emit("voice.vad.error", normalized_error="VAD_FAILURE")
         return self._terminal(SpeechTerminationReason.VAD_FAILURE)
+
+    def end_of_file(self) -> SpeechSegment | None:
+        """Terminate a file-backed segment without treating EOF as a device failure."""
+        return self._finish(SpeechTerminationReason.END_OF_FILE)
 
     def calibrate(
         self,
@@ -972,8 +981,539 @@ class WindowsAudioInputAdapter:
             self._stream = None
 
 
+class VadModelStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    MISSING = "MISSING"
+    INVALID_CHECKSUM = "INVALID_CHECKSUM"
+    BACKEND_UNAVAILABLE = "BACKEND_UNAVAILABLE"
+    LOAD_FAILED = "LOAD_FAILED"
+    CLOSED = "CLOSED"
+
+
+@dataclass(frozen=True)
+class SileroVadModelManifest:
+    model_id: str
+    backend: str
+    version: str
+    filename: str
+    sha256: str
+    download_source: str
+    sample_rate: int = 16000
+    window_size: int = 512
+    license: str = "MIT"
+    source_metadata: str = "k2-fsa/sherpa-onnx release asset"
+
+    @classmethod
+    def load(cls, path: Path) -> SileroVadModelManifest:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        aliases = {
+            "model_version": "version",
+            "source_url": "download_source",
+            "source_project": "source_metadata",
+        }
+        for source, target in aliases.items():
+            if source in data:
+                data[target] = data.pop(source)
+        result = cls(**data)
+        if (
+            not path.name == "manifest.json"
+            or len(result.sha256) != 64
+            or any(char not in "0123456789abcdefABCDEF" for char in result.sha256)
+            or Path(result.filename).name != result.filename
+            or not result.download_source.startswith("https://")
+            or result.sample_rate != 16000
+            or result.window_size != 512
+        ):
+            raise ValueError("INVALID_VAD_MANIFEST")
+        return result
+
+
+class WaveDecodeError(StrEnum):
+    WAV_FILE_NOT_FOUND = "WAV_FILE_NOT_FOUND"
+    WAV_PATH_INVALID = "WAV_PATH_INVALID"
+    WAV_FORMAT_INVALID = "WAV_FORMAT_INVALID"
+    WAV_UNSUPPORTED = "WAV_UNSUPPORTED"
+    WAV_TOO_LARGE = "WAV_TOO_LARGE"
+    WAV_TOO_LONG = "WAV_TOO_LONG"
+    WAV_EMPTY = "WAV_EMPTY"
+    WAV_TRUNCATED = "WAV_TRUNCATED"
+    WAV_DECODE_FAILED = "WAV_DECODE_FAILED"
+
+
+@dataclass(frozen=True)
+class WaveDecodeConfiguration:
+    maximum_file_bytes: int = 20 * 1024 * 1024
+    maximum_duration_seconds: int = 300
+    maximum_decoded_samples: int = 4_800_000
+    supported_channel_counts: tuple[int, ...] = (1, 2)
+    supported_sample_widths: tuple[int, ...] = (1, 2, 3, 4)
+    minimum_sample_rate: int = 8000
+    maximum_sample_rate: int = 48000
+    target_sample_rate: int = 16000
+    target_channels: int = 1
+
+    def __post_init__(self) -> None:
+        numeric = (
+            self.maximum_file_bytes,
+            self.maximum_duration_seconds,
+            self.maximum_decoded_samples,
+            self.minimum_sample_rate,
+            self.maximum_sample_rate,
+            self.target_sample_rate,
+            self.target_channels,
+        )
+        if any(not isfinite(float(value)) or value <= 0 for value in numeric) or (
+            self.minimum_sample_rate > self.maximum_sample_rate
+            or self.target_sample_rate != 16000
+            or self.target_channels != 1
+            or not self.supported_channel_counts
+            or not self.supported_sample_widths
+            or any(
+                value <= 0 for value in self.supported_channel_counts + self.supported_sample_widths
+            )
+        ):
+            raise ValueError("invalid WAV decode configuration")
+
+
+@dataclass(frozen=True)
+class WaveAudioMetadata:
+    source_sample_rate: int
+    source_channels: int
+    source_sample_width: int
+    source_frame_count: int
+    source_duration_seconds: float
+    normalized_sample_rate: int
+    normalized_sample_count: int
+    normalized_duration_seconds: float
+
+
+@dataclass
+class DecodedWaveAudio:
+    filename: str
+    metadata: WaveAudioMetadata
+    _samples: list[float] = field(repr=False)
+    samples_cleared: bool = False
+
+    @property
+    def samples(self) -> tuple[float, ...]:
+        return tuple(self._samples)
+
+    def public(self) -> dict[str, object]:
+        return {
+            "filename": self.filename,
+            "source_sample_rate": self.metadata.source_sample_rate,
+            "source_channels": self.metadata.source_channels,
+            "source_sample_width": self.metadata.source_sample_width,
+            "source_frame_count": self.metadata.source_frame_count,
+            "source_duration_seconds": self.metadata.source_duration_seconds,
+            "normalized_sample_rate": self.metadata.normalized_sample_rate,
+            "normalized_sample_count": self.metadata.normalized_sample_count,
+            "normalized_duration_seconds": self.metadata.normalized_duration_seconds,
+            "total_samples": len(self._samples),
+            "samples_cleared": self.samples_cleared,
+        }
+
+    def clear_samples(self) -> None:
+        self._samples.clear()
+        self.samples_cleared = True
+
+
+@dataclass(frozen=True)
+class WaveDecodeResult:
+    audio: DecodedWaveAudio | None
+    error: WaveDecodeError | None
+
+    @property
+    def verification_state(self) -> str:
+        return "VERIFIED" if self.audio else "UNVERIFIED"
+
+
+class BoundedWaveDecoder:
+    """PCM-only local decoder; decoded samples never leave this in-memory boundary."""
+
+    def __init__(self, config: WaveDecodeConfiguration | None = None) -> None:
+        self.config = config or WaveDecodeConfiguration()
+
+    def decode(self, path: Path) -> WaveDecodeResult:
+        if not path.exists():
+            return WaveDecodeResult(None, WaveDecodeError.WAV_FILE_NOT_FOUND)
+        if not path.is_file():
+            return WaveDecodeResult(None, WaveDecodeError.WAV_PATH_INVALID)
+        if path.suffix.casefold() != ".wav":
+            return WaveDecodeResult(None, WaveDecodeError.WAV_UNSUPPORTED)
+        if path.stat().st_size > self.config.maximum_file_bytes:
+            return WaveDecodeResult(None, WaveDecodeError.WAV_TOO_LARGE)
+        try:
+            with wave.open(str(path), "rb") as source:
+                channels, width, rate, frames = (
+                    source.getnchannels(),
+                    source.getsampwidth(),
+                    source.getframerate(),
+                    source.getnframes(),
+                )
+                if (
+                    channels not in self.config.supported_channel_counts
+                    or width not in self.config.supported_sample_widths
+                    or not self.config.minimum_sample_rate
+                    <= rate
+                    <= self.config.maximum_sample_rate
+                ):
+                    return WaveDecodeResult(None, WaveDecodeError.WAV_UNSUPPORTED)
+                if not frames:
+                    return WaveDecodeResult(None, WaveDecodeError.WAV_EMPTY)
+                if frames > self.config.maximum_decoded_samples:
+                    return WaveDecodeResult(None, WaveDecodeError.WAV_TOO_LONG)
+                duration = frames / rate
+                if duration > self.config.maximum_duration_seconds:
+                    return WaveDecodeResult(None, WaveDecodeError.WAV_TOO_LONG)
+                raw = source.readframes(frames)
+                if len(raw) != frames * channels * width:
+                    return WaveDecodeResult(None, WaveDecodeError.WAV_TRUNCATED)
+        except (EOFError, OSError, wave.Error):
+            return WaveDecodeResult(None, WaveDecodeError.WAV_FORMAT_INVALID)
+        values: list[float] = []
+        for offset in range(0, len(raw), width):
+            part = raw[offset : offset + width]
+            integer = int.from_bytes(part, "little", signed=width != 1)
+            values.append(
+                (integer - 128) / 128 if width == 1 else integer / float(1 << (width * 8 - 1))
+            )
+        mono = (
+            values
+            if channels == 1
+            else [(values[i] + values[i + 1]) / 2 for i in range(0, len(values), 2)]
+        )
+        if not all(isfinite(value) and -1.0 <= value <= 1.0 for value in mono):
+            return WaveDecodeResult(None, WaveDecodeError.WAV_DECODE_FAILED)
+        target_count = round(len(mono) * self.config.target_sample_rate / rate)
+        if target_count > self.config.maximum_decoded_samples:
+            return WaveDecodeResult(None, WaveDecodeError.WAV_TOO_LONG)
+        if rate != self.config.target_sample_rate:
+            # Deterministic linear interpolation; output time positions are monotonic.
+            normalized = [
+                mono[min(int(index * rate / self.config.target_sample_rate), len(mono) - 1)]
+                if len(mono) == 1
+                else mono[int(index * rate / self.config.target_sample_rate)]
+                + (
+                    mono[min(int(index * rate / self.config.target_sample_rate) + 1, len(mono) - 1)]
+                    - mono[int(index * rate / self.config.target_sample_rate)]
+                )
+                * ((index * rate / self.config.target_sample_rate) % 1)
+                for index in range(target_count)
+            ]
+        else:
+            normalized = mono
+        if not normalized or not all(
+            isfinite(value) and -1.0 <= value <= 1.0 for value in normalized
+        ):
+            return WaveDecodeResult(None, WaveDecodeError.WAV_DECODE_FAILED)
+        metadata = WaveAudioMetadata(
+            rate,
+            channels,
+            width,
+            frames,
+            duration,
+            self.config.target_sample_rate,
+            len(normalized),
+            len(normalized) / self.config.target_sample_rate,
+        )
+        return WaveDecodeResult(DecodedWaveAudio(path.name, metadata, normalized), None)
+
+
+class SherpaOnnxSileroVadAdapter:
+    """Explicit single-owner Sherpa VAD boundary; it never opens an audio device."""
+
+    def __init__(self, manifest: SileroVadModelManifest, model_path: Path) -> None:
+        self.manifest, self.model_path = manifest, model_path
+        self.status = VadModelStatus.MISSING
+        self.initialized = False
+        self.last_error: str | None = None
+        self._detector: Any | None = None
+
+    def _checksum_valid(self) -> bool:
+        if not self.model_path.is_file():
+            return False
+        return (
+            hashlib.sha256(self.model_path.read_bytes()).hexdigest().casefold()
+            == self.manifest.sha256.casefold()
+        )
+
+    def initialize(self) -> VadModelStatus:
+        if self.status == VadModelStatus.CLOSED:
+            return self.status
+        if self.initialized:
+            return self.status
+        if not self.model_path.is_file():
+            self.status = VadModelStatus.MISSING
+            return self.status
+        if not self._checksum_valid():
+            self.status = VadModelStatus.INVALID_CHECKSUM
+            return self.status
+        try:
+            sherpa = import_module("sherpa_onnx")
+        except (ImportError, ModuleNotFoundError):
+            self.status = VadModelStatus.BACKEND_UNAVAILABLE
+            return self.status
+        try:
+            config = sherpa.VadModelConfig(
+                silero_vad=sherpa.SileroVadModelConfig(model=str(self.model_path))
+            )
+            self._detector = sherpa.VoiceActivityDetector(config, self.manifest.sample_rate)
+            self.initialized = True
+            self.status = VadModelStatus.AVAILABLE
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            self.status = VadModelStatus.LOAD_FAILED
+            self.last_error = "MODEL_INITIALIZATION_FAILED"
+        return self.status
+
+    def analyze(
+        self, samples: tuple[float, ...], sample_rate: int, timestamp: float
+    ) -> VoiceActivityResult:
+        if not self.initialized or self._detector is None:
+            raise RuntimeError("VAD_NOT_INITIALIZED")
+        if (
+            sample_rate != self.manifest.sample_rate
+            or len(samples) != self.manifest.window_size
+            or not all(isfinite(x) for x in samples)
+        ):
+            raise ValueError("INVALID_VAD_FRAME")
+        try:
+            # sherpa's detector owns streaming state; the public Python API accepts samples.
+            self._detector.accept_waveform(sample_rate, list(samples))
+            probability = float(getattr(self._detector, "probability", 0.0))
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            self.last_error = "VAD_INFERENCE_FAILED"
+            raise RuntimeError("VAD_INFERENCE_FAILED") from None
+        if not isfinite(probability) or not 0 <= probability <= 1:
+            raise RuntimeError("INVALID_VAD_PROBABILITY")
+        energy = sqrt(sum(x * x for x in samples) / len(samples))
+        return VoiceActivityResult(
+            timestamp,
+            probability,
+            probability >= 0.5,
+            energy,
+            energy >= 0.01,
+            len(samples) * 1000 / sample_rate,
+            "sherpa-onnx-silero",
+        )
+
+    def reset(self) -> None:
+        if self.initialized and self._detector is not None:
+            try:
+                self._detector.reset()
+            except (AttributeError, OSError, RuntimeError):
+                self.last_error = "VAD_RESET_FAILED"
+
+    def close(self) -> None:
+        if self.status == VadModelStatus.CLOSED:
+            return
+        self._detector = None
+        self.initialized = False
+        self.status = VadModelStatus.CLOSED
+
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "vad_backend": self.manifest.backend,
+            "vad_model_id": self.manifest.model_id,
+            "vad_model_version": self.manifest.version,
+            "vad_model_status": self.status,
+            "vad_model_path_sanitized": self.model_path.name,
+            "vad_backend_available": self.status != VadModelStatus.BACKEND_UNAVAILABLE,
+            "vad_initialized": self.initialized,
+            "vad_last_error": self.last_error,
+            "vad_configuration": {
+                "sample_rate": self.manifest.sample_rate,
+                "window_size": self.manifest.window_size,
+            },
+        }
+
+
+@dataclass(frozen=True)
+class VadFileInferenceResult:
+    operation: str = "vad-file-test"
+    sanitized_input_name: str = ""
+    source_sample_rate: int = 0
+    source_channels: int = 0
+    source_sample_width: int = 0
+    source_frame_count: int = 0
+    source_duration_seconds: float = 0.0
+    normalized_sample_rate: int = 16000
+    normalized_sample_count: int = 0
+    normalized_duration_seconds: float = 0.0
+    processed_window_count: int = 0
+    padded_sample_count: int = 0
+    average_vad_probability: float = 0.0
+    maximum_vad_probability: float = 0.0
+    vad_positive_frame_count: int = 0
+    energy_gate_positive_frame_count: int = 0
+    speech_candidate_count: int = 0
+    accepted_segment_count: int = 0
+    rejected_candidate_count: int = 0
+    segments: tuple[dict[str, object], ...] = ()
+    detector_name: str = "unknown"
+    detector_reset_before: bool = False
+    detector_reset_after: bool = False
+    decoded_samples_cleared: bool = False
+    segment_samples_cleared: bool = False
+    cleanup_verified: bool = False
+    verification_state: str = "UNVERIFIED"
+    normalized_error: str | None = None
+    retryable: bool = False
+
+    def public(self) -> dict[str, object]:
+        return self.__dict__.copy()
+
+
+class VadInferenceError(RuntimeError):
+    """Expected, normalized detector inference failure."""
+
+
+class VadDetectorUnavailableError(VadInferenceError):
+    """The injected detector cannot process a file frame."""
+
+
+class VadInvalidProbabilityError(VadInferenceError):
+    """The detector returned a malformed activity result."""
+
+
+class VadDetectorResetError(VadInferenceError):
+    """The detector could not reset its bounded file-inference state."""
+
+
+class VadFileInferenceService:
+    """File-only orchestration.  It owns neither a microphone nor a model loader."""
+
+    def __init__(
+        self,
+        decoder: BoundedWaveDecoder,
+        detector: VoiceActivityDetector,
+        controller_factory: Callable[[], SpeechSegmentController],
+        config: VadConfiguration,
+    ) -> None:
+        self.decoder, self.detector, self.controller_factory, self.config = (
+            decoder,
+            detector,
+            controller_factory,
+            config,
+        )
+
+    def infer(self, path: Path) -> VadFileInferenceResult:
+        decoded = self.decoder.decode(path)
+        if decoded.audio is None:
+            return VadFileInferenceResult(
+                sanitized_input_name=path.name,
+                normalized_error=decoded.error.value
+                if decoded.error
+                else WaveDecodeError.WAV_DECODE_FAILED.value,
+            )
+        audio = decoded.audio
+        meta = audio.metadata
+        common = {
+            "sanitized_input_name": audio.filename,
+            "source_sample_rate": meta.source_sample_rate,
+            "source_channels": meta.source_channels,
+            "source_sample_width": meta.source_sample_width,
+            "source_frame_count": meta.source_frame_count,
+            "source_duration_seconds": meta.source_duration_seconds,
+            "normalized_sample_rate": meta.normalized_sample_rate,
+            "normalized_sample_count": meta.normalized_sample_count,
+            "normalized_duration_seconds": meta.normalized_duration_seconds,
+            "detector_name": type(self.detector).__name__,
+        }
+        before = after = False
+        segments: list[SpeechSegment] = []
+        probabilities: list[float] = []
+        vad_positive = energy_positive = 0
+        controller = self.controller_factory()
+        error: str | None = None
+        padded = 0
+        try:
+            self.detector.reset()
+            before = True
+            values = audio.samples
+            for offset in range(0, len(values), self.config.window_size):
+                window = values[offset : offset + self.config.window_size]
+                if len(window) < self.config.window_size:
+                    padded += self.config.window_size - len(window)
+                    window += (0.0,) * (self.config.window_size - len(window))
+                activity = self.detector.analyze(
+                    window, self.config.sample_rate, offset / self.config.sample_rate
+                )
+                if not activity.valid():
+                    raise VadInvalidProbabilityError
+                probabilities.append(activity.probability)
+                vad_positive += int(activity.is_speech)
+                energy_positive += int(activity.energy_gate_passed)
+                result = controller.process(
+                    AudioFrame(
+                        window, offset / self.config.sample_rate, offset // self.config.window_size
+                    ),
+                    activity,
+                    "vad-file",
+                )
+                if result:
+                    segments.append(result)
+            if error is None:
+                terminal = controller.end_of_file()
+                if terminal:
+                    segments.append(terminal)
+        except VadInvalidProbabilityError:
+            error = "VAD_INVALID_PROBABILITY"
+        except (VadInferenceError, RuntimeError, ValueError):
+            error = "VAD_INFERENCE_FAILED"
+        finally:
+            try:
+                self.detector.reset()
+                after = True
+            except (VadDetectorResetError, RuntimeError, ValueError):
+                error = error or "VAD_CLEANUP_UNVERIFIED"
+            audio.clear_samples()
+        safe = tuple(item.public() for item in segments)
+        for item in segments:
+            item.clear_samples()
+        cleaned = audio.samples_cleared and all(not item.samples for item in segments) and after
+        if not cleaned:
+            error = error or "VAD_CLEANUP_UNVERIFIED"
+        return VadFileInferenceResult(
+            **cast(Any, common),
+            processed_window_count=len(probabilities),
+            padded_sample_count=padded,
+            average_vad_probability=sum(probabilities) / len(probabilities)
+            if probabilities
+            else 0.0,
+            maximum_vad_probability=max(probabilities, default=0.0),
+            vad_positive_frame_count=vad_positive,
+            energy_gate_positive_frame_count=energy_positive,
+            accepted_segment_count=len(safe),
+            segments=safe,
+            detector_reset_before=before,
+            detector_reset_after=after,
+            decoded_samples_cleared=audio.samples_cleared,
+            segment_samples_cleared=all(not item.samples for item in segments),
+            cleanup_verified=cleaned,
+            verification_state="VERIFIED" if error is None and cleaned else "UNVERIFIED",
+            normalized_error=error,
+            retryable=error in {"VAD_UNAVAILABLE", "VAD_INFERENCE_FAILED"},
+        )
+
+
+VadFileTestResult = VadFileInferenceResult
+
+
+def run_vad_file_test(path: Path, adapter: SherpaOnnxSileroVadAdapter) -> VadFileInferenceResult:
+    """Compatibility entry point; new callers should inject dependencies directly."""
+    if adapter.initialize() != VadModelStatus.AVAILABLE:
+        return VadFileInferenceResult(
+            sanitized_input_name=path.name, normalized_error="VAD_UNAVAILABLE"
+        )
+    config = VadConfiguration()
+    return VadFileInferenceService(
+        BoundedWaveDecoder(), adapter, lambda: SpeechSegmentController(config), config
+    ).infer(path)
+
+
 class SherpaOnnxSileroVad(FakeVad):
-    """Placeholder until an installed declared Silero model is selected."""
+    """Legacy fake boundary retained for Phase 1A capture composition."""
 
 
 class SherpaOnnxWakeWordEngine(FakeWakeWordEngine):

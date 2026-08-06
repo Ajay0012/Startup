@@ -15,6 +15,21 @@ The state machine is `STOPPED → INITIALIZING → IDLE_LISTENING → SPEECH_CAN
 Friend voices require recorded informed consent, local restricted storage, revocation/removal, traceable providers, and a non-cloned fallback. No custom model may load without a valid local consent record.
 # Phase 1B1 deterministic core
 
+## Phase 1B2 model boundary
+
+Phase 1B2 adds an explicit, file-only `SherpaOnnxSileroVadAdapter`. It lazily
+imports `sherpa_onnx`, has no global detector, and requires `initialize()`;
+`reset()` preserves the loaded model and clears stream state, while `close()` is
+idempotent. The selected model is Silero VAD v4 (`silero_vad.onnx`), declared in
+`models/voice/vad/silero/v4/manifest.json`. Its SHA-256 is checked before use.
+The PowerShell installer is the only download route and is explicitly invoked;
+it never installs wake-word or transcription artifacts.
+
+Health is typed as AVAILABLE, MISSING, INVALID_CHECKSUM, BACKEND_UNAVAILABLE,
+LOAD_FAILED, or CLOSED. `voice diagnostics` and `voice vad-model-status` expose
+only sanitized model metadata. Phase 1B3 remains live microphone validation;
+wake-word integration remains a separate future milestone.
+
 Phase 1B1 adds an input-only, fake-testable VAD segmentation core.  It does not
 load Silero/sherpa models, open a microphone, persist calibration/audio, invoke
 wake words, Whisper, Gemini, command routing, or TTS.
@@ -49,5 +64,26 @@ never lower it below `minimum_energy_floor`. Profiles are not persisted.
 Metadata-only core events are calibration started/completed/failed, speech
 candidate/started/stopped/rejected, and VAD error. Subscriber failures are
 isolated by the event bus and do not retain audio. Tests use fake frames and fake
-detectors only. Phase 1B2 will add explicit real Silero integration; Phase 1B3
-will validate live microphone operation separately.
+detectors only.
+
+## Phase 1B2A: bounded WAV inference
+
+Phase 1B2A adds an offline-only WAV boundary and injected file inference.  It
+accepts local regular, uncompressed PCM WAV files only: mono/stereo, 8/16/24/32
+bit integer PCM, 8–48 kHz, at most 20 MiB, 300 seconds, and 4,800,000 decoded
+source samples. Integer PCM is normalized to finite floats in [-1, 1]. Stereo
+uses `(left + right) / 2`; mono is then deterministically linearly resampled to
+16 kHz. Source and normalized durations are reported independently.
+
+The final incomplete 512-sample VAD window is zero padded. Padding is reported,
+but excluded from audio durations and speech duration. `VadFileInferenceService`
+receives a decoder, detector, controller factory, and VAD configuration; it does
+not construct a runtime, model loader, microphone, or singleton. It resets the
+detector before and after work, clears decoded and segment samples, and publishes
+metadata-only results. A valid no-speech file is VERIFIED.
+
+`pangu voice vad-file-test FILE.wav` has no microphone, wake-word, transcription,
+routing, Gemini, or TTS path. Exit codes are 0 verified, 2 invalid configuration,
+3 missing file/model, 6 decode or inference failure, 7 unsupported WAV/backend,
+and 8 cleanup/verification failure. Phase 1B2B remains the deferred real-adapter
+activation provider; Phase 1B3 remains deferred live microphone integration.

@@ -1,0 +1,12 @@
+{
+  "model_id": "silero-vad-v4",
+  "backend": "sherpa-onnx",
+  "version": "v4",
+  "filename": "silero_vad.onnx",
+  "sha256": "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28",
+  "download_source": "https://github.com/snakers4/silero-vad/raw/v4.0/files/silero_vad.onnx",
+  "sample_rate": 16000,
+  "window_size": 512,
+  "license": "MIT",
+  "source_metadata": "Silero VAD v4 ONNX, snakers4/silero-vad"
+}
