@@ -17,6 +17,7 @@ browser = ["playwright>=1.50"]
 
 [project.scripts]
 pangu = "pangu.cli:main"
+pangu-upgrade = "pangu.self_upgrade_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pangu"]
