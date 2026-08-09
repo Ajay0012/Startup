@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -78,6 +77,7 @@ class SubprocessRunner:
     """Argument-vector-only process boundary; no shell expansion is permitted."""
 
     def run(self, args: list[str], cwd: Path, timeout: int = 900) -> ProcessResult:
+        no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
         completed = subprocess.run(
             args,
             cwd=str(cwd),
@@ -85,7 +85,7 @@ class SubprocessRunner:
             text=True,
             timeout=timeout,
             check=False,
-            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+            creationflags=no_window,
         )
         return ProcessResult(completed.returncode, completed.stdout[-50_000:], completed.stderr[-50_000:])
 
