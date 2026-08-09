@@ -35,16 +35,13 @@ from .model_runtime import (
     RetryPolicy,
 )
 from .permissions import PermissionGrant, PermissionStore
+from .production_voice import ProductionVoiceSessionRuntime, WakePhrasePolicyVerifier
 from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
 from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
-from .voice import (
-    SherpaOnnxWakeWordEngine,
-    VadActivationService,
-    VoiceSessionRuntime,
-    WindowsAudioInputAdapter,
-)
-from .voice_providers import FasterWhisperTranscriptionProvider, TranscriptionWakePhraseVerifier
+from .voice import VadActivationService, VoiceSessionRuntime, WindowsAudioInputAdapter
+from .voice_providers import FasterWhisperTranscriptionProvider
+from .wake_word import SherpaKeywordSpotterWakeWordEngine, load_wake_word_config
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -219,11 +216,14 @@ class RuntimeBuilder:
         transcriber = FasterWhisperTranscriptionProvider(
             self._root / "models" / "voice" / "whisper"
         )
-        voice = self._voice_runtime or VoiceSessionRuntime(
+        wake = SherpaKeywordSpotterWakeWordEngine(
+            load_wake_word_config(self._root, settings.pangu_wake_cooldown_seconds)
+        )
+        voice = self._voice_runtime or ProductionVoiceSessionRuntime(
             WindowsAudioInputAdapter(),
             vad,
-            SherpaOnnxWakeWordEngine(),
-            TranscriptionWakePhraseVerifier(transcriber),
+            wake,
+            WakePhrasePolicyVerifier(),
             transcriber,
             events,
             LanguageRuntime(),
