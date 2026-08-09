@@ -4,6 +4,7 @@ import pytest
 
 from pangu.events import EventBus, EventEnvelope
 from pangu.production_voice import ProductionVoiceSessionRuntime, WakePhrasePolicyVerifier
+from pangu.realtime_voice import BargeInPolicy
 from pangu.tts import NullSpeechProvider
 from pangu.voice import (
     FakeAudioInputAdapter,
@@ -63,6 +64,34 @@ async def test_turn_state_returns_to_wake_listening() -> None:
     await voice.return_to_wake()
     assert voice.state == VoiceState.IDLE_LISTENING
     await events.stop()
+
+
+@pytest.mark.asyncio
+async def test_barge_in_reuses_same_voice_runtime_without_new_wake() -> None:
+    events = EventBus()
+    await events.start()
+    voice = ProductionVoiceSessionRuntime(
+        FakeAudioInputAdapter(),
+        FakeVad(),
+        FakeWakeWordEngine(),
+        WakePhrasePolicyVerifier(),
+        FakeTranscriptionProvider(),
+        events,
+        LanguageRuntime(),
+    )
+    voice.state = VoiceState.COMMAND_READY
+    voice.session_id = "session"
+    await voice.begin_barge_in()
+    assert voice.state == VoiceState.COMMAND_LISTENING
+    assert voice.metrics["barge_ins"] == 1
+    await events.stop()
+
+
+def test_barge_in_policy_is_bounded() -> None:
+    policy = BargeInPolicy()
+    assert policy.maximum_followups == 3
+    with pytest.raises(ValueError):
+        BargeInPolicy(maximum_followups=100)
 
 
 @pytest.mark.asyncio
