@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from time import monotonic
 from typing import TYPE_CHECKING
 
 from .events import EventBus, EventEnvelope, EventPriority
 from .production_voice import ProductionVoiceSessionRuntime
 from .tts import SpeechOutputProvider
-from .voice import SpeechSegmentController, VadConfiguration, VoiceState
+from .voice import AudioFrame, SpeechSegment, SpeechSegmentController, VadConfiguration, VoiceState
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -24,13 +24,7 @@ class RealtimeTurnMetrics:
 
 
 class RealtimeVoiceTurnCoordinator:
-    """Owns one bounded post-wake conversational turn.
-
-    Wake detection remains in ProductionVoiceSessionRuntime. This coordinator begins only
-    after `voice.wake.detected`, captures exactly one VAD-bounded command from the existing
-    microphone/ring-buffer owner, transcribes locally, executes through Runtime, speaks the
-    verified result, and returns the same voice runtime to wake listening.
-    """
+    """Own one bounded post-wake conversational turn using existing runtime owners."""
 
     def __init__(
         self,
@@ -82,7 +76,7 @@ class RealtimeVoiceTurnCoordinator:
             return
         self._turn_task = asyncio.create_task(self._run_turn(event), name="pangu-realtime-turn")
 
-    async def _capture_command(self) -> tuple[object | None, float]:
+    async def _capture_command(self) -> tuple[SpeechSegment | None, float]:
         started = monotonic()
         config = VadConfiguration(
             sample_rate=self.voice.config.sample_rate,
@@ -137,13 +131,7 @@ class RealtimeVoiceTurnCoordinator:
             speech_ended = monotonic()
             transcription = await asyncio.to_thread(
                 self.voice.transcriber.transcribe,
-                tuple(
-                    # The transcriber accepts AudioFrame tuples. Preserve bounded audio in memory only.
-                    __import__("pangu.voice", fromlist=["AudioFrame"]).AudioFrame(
-                        tuple(segment.samples), segment.start_timestamp, 1
-                    )
-                    for _ in (0,)
-                ),
+                (AudioFrame(tuple(segment.samples), segment.start_timestamp, 1),),
             )
             speech_to_transcript_ms = (monotonic() - speech_ended) * 1000
             segment.clear_samples()
@@ -194,7 +182,7 @@ class RealtimeVoiceTurnCoordinator:
             await self.events.publish(
                 EventEnvelope(
                     "voice.turn.completed",
-                    {"session_id": self.voice.session_id, **metrics.__dict__},
+                    {"session_id": self.voice.session_id, **asdict(metrics)},
                     EventPriority.LOW,
                 )
             )
@@ -205,7 +193,6 @@ class RealtimeVoiceTurnCoordinator:
             await self.voice.fail_and_return_to_wake("REALTIME_TURN_FAILED")
 
     async def _speak_and_return(self, text: str) -> None:
-        # Approximate suppression window; SAPI completion still determines the actual return to wake.
         expected_seconds = max(1.0, min(15.0, len(text.split()) / 2.5 + 0.75))
         self.voice.suppress_wake_during_tts(expected_seconds)
         await self.events.publish(
