@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .missions import MissionSnapshot, MissionTaskResult, MissionTaskSpec, PersistentMissionRuntime
 from .model_runtime import GeminiProvider, ModelRequest, ModelRole, StructuredOutputValidator
@@ -85,7 +85,9 @@ class AgentPlanner:
     def validate_operations(cls, plan: MissionPlan) -> MissionPlan:
         forbidden = [task.operation for task in plan.tasks if task.operation not in cls.ALLOWED_OPERATIONS]
         if forbidden:
-            raise ValueError(f"mission contains unsupported operations: {', '.join(sorted(set(forbidden)))}")
+            raise ValueError(
+                f"mission contains unsupported operations: {', '.join(sorted(set(forbidden)))}"
+            )
         return plan
 
     async def plan(self, goal: str, grounding: tuple[str, ...] = ()) -> MissionPlan:
@@ -102,7 +104,9 @@ class AgentPlanner:
             f"Goal: {goal}\n"
             f"Grounding: {list(grounding)[:12]}"
         )
-        request = ModelRequest(prompt, ModelRole.PRIMARY, mission_id="mission-planning", timeout_seconds=30)
+        request = ModelRequest(
+            prompt, ModelRole.PRIMARY, mission_id="mission-planning", timeout_seconds=30
+        )
         result = await self.provider.generate_async(request, structured=True)
         if not result.text:
             raise RuntimeError(f"mission planning unavailable: {result.error}")
