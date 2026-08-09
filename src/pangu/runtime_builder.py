@@ -36,9 +36,11 @@ from .model_runtime import (
 )
 from .permissions import PermissionGrant, PermissionStore
 from .production_voice import ProductionVoiceSessionRuntime, WakePhrasePolicyVerifier
+from .realtime_voice import RealtimeVoiceTurnCoordinator
 from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
 from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
+from .tts import WindowsSapiSpeechProvider
 from .voice import VadActivationService, VoiceSessionRuntime, WindowsAudioInputAdapter
 from .voice_providers import FasterWhisperTranscriptionProvider
 from .wake_word import SherpaKeywordSpotterWakeWordEngine, load_wake_word_config
@@ -73,6 +75,7 @@ class ServiceContainer:
     voice: VoiceSessionRuntime
     gesture: GestureRuntime
     runtime: Runtime = field(init=False)
+    realtime_voice: RealtimeVoiceTurnCoordinator | None = field(init=False, default=None)
 
 
 class RuntimeBuilder:
@@ -279,6 +282,21 @@ class RuntimeBuilder:
             container.system_control,
             container.voice,
         )
+        if isinstance(container.voice, ProductionVoiceSessionRuntime):
+            container.realtime_voice = RealtimeVoiceTurnCoordinator(
+                container.voice,
+                container.runtime,
+                container.events,
+                WindowsSapiSpeechProvider(),
+            )
+            container.lifecycle.register(
+                LifecycleService(
+                    "realtime_voice",
+                    container.realtime_voice.start,
+                    container.realtime_voice.stop,
+                    ("events", "voice"),
+                )
+            )
         if settings.pangu_gestures_enabled:
             container.lifecycle.register(
                 LifecycleService("gesture", container.gesture.start, container.gesture.stop, ("events",))
