@@ -14,21 +14,35 @@ Repository truth remains authoritative. Status labels distinguish code implement
 | Gemini provider | IMPLEMENTED | SDK-isolated provider, bounded retries/circuit breaker/budgets; live validation environment-dependent |
 | Microphone capture and VAD | IMPLEMENTED | `voice.py`; real hardware revalidation required |
 | Production Faster Whisper provider | IMPLEMENTED_UNVALIDATED | `voice_providers.py`; lazy local-only model loading and truthful unavailable states |
-| Production wake model | EXTERNAL_DEPENDENCY_MISSING | expected real wake model/provider validation still required |
+| Advanced Hey Pangu wake provider | IMPLEMENTED_UNVALIDATED | `wake_word.py`, `production_voice.py`, `scripts/install-wake-model.ps1`; Windows CI and microphone validation required |
 | Gesture perception | IMPLEMENTED_UNVALIDATED | `gestures.py`; MediaPipe Hand Landmarker + deterministic temporal gesture recognition |
 | Spatial hand interaction proposals | IMPLEMENTED_UNVALIDATED | `spatial_interaction.py`; no direct OS execution from model/gesture output |
 | Native session agent | PARTIAL | current .NET host is still a mutex/foundation rather than the complete supervisor described by historical handoff |
 | Native overlay | PARTIAL_DEGRADED | current host remains degraded contract mode; full interactive HUD validation remains outstanding |
 
+## Advanced wake-word continuation — 2026-08-09
+
+The historical `SherpaOnnxWakeWordEngine` in `voice.py` was verified to be only a fake compatibility boundary and is no longer selected by `RuntimeBuilder`. Production composition now uses `SherpaKeywordSpotterWakeWordEngine` from `wake_word.py` and the existing single voice lifecycle is hardened by `ProductionVoiceSessionRuntime`.
+
+Wake detection is local and fail-closed. The provider requires an explicit sherpa-onnx KWS model bundle under `models/voice/wake/sherpa-kws`, rejects low-energy windows before inference, accepts only an explicit PANGU label allowlist, applies bounded cooldown, supports TTS suppression, clears stale ring-buffer audio after a confirmed wake, and emits `voice.wake.detected` metadata without persisting microphone audio.
+
+Supported configured labels include `PANGU`, `HEY_PANGU`, `HAY_PANGU`, `HEY_PANGUU`, and `HEY_PANGOO` so accent/pronunciation variants can be encoded as distinct keyword paths while canonical behavior remains PANGU/HEY PANGU. These variants are not a claim of hardware accuracy; thresholds must be calibrated against positive and negative microphone samples on the target machine.
+
+`scripts/install-wake-model.ps1` installs the selected low-latency sherpa-onnx KWS model only when the caller supplies a trusted SHA-256 for the source archive. It generates a local pronunciation extension for PANGU and a tuned keyword file instead of auto-trusting an unverified download. No wake model is silently downloaded during normal PANGU startup.
+
+`ProductionVoiceSessionRuntime.start()` now defaults to capture enabled, starts the existing bounded normalization worker and a bounded wake watcher inside the same authoritative voice runtime, and performs deterministic worker cleanup on shutdown. This fixes the previous state where lifecycle startup called `voice.start()` but did not actually begin production microphone capture.
+
+The remaining wake gate is validation, not another implementation placeholder: the real KWS artifacts must be installed, Windows CI must pass, and false-accept/false-reject behavior must be measured with real microphone samples including silence, fan noise, keyboard noise, music/TV speech, near-field/far-field speech, and PANGU TTS playback.
+
 ## Production voice continuation — 2026-08-09
 
-`RuntimeBuilder` no longer wires `FakeTranscriptionProvider` or `FakeWakePhraseVerifier` into the production composition. It now constructs `FasterWhisperTranscriptionProvider` using the local `models/voice/whisper` directory and uses `TranscriptionWakePhraseVerifier` for fail-closed phrase confirmation. The provider never downloads a model implicitly. Missing model/backend states are returned as explicit unavailable results rather than fabricated transcripts.
+`RuntimeBuilder` no longer wires `FakeTranscriptionProvider` or `FakeWakePhraseVerifier` into the production composition. It constructs `FasterWhisperTranscriptionProvider` using the local `models/voice/whisper` directory. Wake confirmation no longer performs pre-wake Whisper transcription; the local KWS detector is the wake authority and `WakePhrasePolicyVerifier` only validates the already-detected phrase label.
 
-The remaining P0 voice blocker is the wake-word implementation/artifact. The existing `SherpaOnnxWakeWordEngine` boundary must not be called production-complete until a real wake model and real repeated microphone wake-to-response validation exist.
+The provider never downloads a Whisper model implicitly. Missing model/backend states are returned as explicit unavailable results rather than fabricated transcripts.
 
 ## Gesture / spatial interaction — 2026-08-09
 
-PANGU now contains an optional gesture perception runtime integrated through the existing `RuntimeBuilder`, `LifecycleKernel`, and shared `EventBus`. Camera startup is opt-in through `PANGU_GESTURES_ENABLED`; disabled-by-default behavior prevents silent camera activation.
+PANGU contains an optional gesture perception runtime integrated through the existing `RuntimeBuilder`, `LifecycleKernel`, and shared `EventBus`. Camera startup is opt-in through `PANGU_GESTURES_ENABLED`; disabled-by-default behavior prevents silent camera activation.
 
 The gesture subsystem supports deterministic recognition of point, pinch, grab, open palm, directional swipes, two-hand scale, and two-hand rotation. `MediaPipeHandTracker` uses the on-device MediaPipe Tasks Hand Landmarker boundary and requires an explicit local model at `models/vision/hand_landmarker.task` by default. Camera frames are not persisted by the PANGU adapter.
 
@@ -46,4 +60,6 @@ Historical validation recorded 33 Python tests passing at this earlier milestone
 
 ## Current validation requirement
 
-Run `scripts/test.ps1` on a Windows checkout of this branch. It executes compileall, Ruff check, Ruff format check, mypy, pytest, and `dotnet test Pangu.sln`. Real microphone, wake-word, Faster Whisper, camera/gesture, session-agent, and overlay validation remain separate manual gates.
+`.github/workflows/ci.yml` runs the full Windows validation gate for pushes and pull requests: compileall, Ruff check, Ruff format check, mypy, pytest, and `dotnet test Pangu.sln` through `scripts/test.ps1`.
+
+Hardware validation remains separate for microphone/wake-word accuracy, Faster Whisper transcription, camera/gesture interaction, session-agent login startup, and the native overlay.
