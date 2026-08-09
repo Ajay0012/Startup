@@ -22,6 +22,11 @@ class WakePhrasePolicyVerifier:
 class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
     """Always-on production voice runtime using the existing single voice lifecycle."""
 
+    _allowed = dict(VoiceSessionRuntime._allowed)
+    _allowed[VoiceState.COMMAND_READY] = frozenset(
+        {VoiceState.COOLDOWN, VoiceState.COMMAND_LISTENING}
+    )
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._wake_worker: Thread | None = None
@@ -31,6 +36,7 @@ class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
         self.metrics["wake_inference_errors"] = 0
         self.metrics["wake_suppressed"] = 0
         self.metrics["wake_buffer_clears"] = 0
+        self.metrics["barge_ins"] = 0
 
     def _start_wake_worker(self) -> None:
         self._wake_stop.clear()
@@ -85,7 +91,6 @@ class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
             return
         self.metrics["wake_confirmations"] += 1
         await self._transition(VoiceState.WAKE_CONFIRMED, "voice.wake.confirmed")
-        # Never let pre-wake/background audio leak into command capture.
         self.frames.clear()
         self.metrics["wake_buffer_clears"] += 1
         await self._transition(VoiceState.COMMAND_LISTENING, "voice.command.listening")
@@ -111,6 +116,12 @@ class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
     async def mark_command_ready(self) -> None:
         if self.state == VoiceState.TRANSCRIBING:
             await self._transition(VoiceState.COMMAND_READY, "voice.command.ready")
+
+    async def begin_barge_in(self) -> None:
+        if self.state != VoiceState.COMMAND_READY:
+            raise RuntimeError("barge-in requires a completed command response state")
+        self.metrics["barge_ins"] += 1
+        await self._transition(VoiceState.COMMAND_LISTENING, "voice.barge_in.listening")
 
     async def finish_turn(self, reason: str) -> None:
         await self.begin_transcription()
