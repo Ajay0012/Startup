@@ -53,6 +53,7 @@ class PanguSettings(BaseSettings):
     pangu_allow_screenshot_upload: bool = False
     pangu_allow_document_upload: bool = False
     pangu_redact_sensitive_data: bool = True
+    pangu_wake_cooldown_seconds: float = 2.0
     pangu_gestures_enabled: bool = False
     pangu_gesture_camera_index: int = 0
     pangu_gesture_model_path: str = "models/vision/hand_landmarker.task"
@@ -81,6 +82,13 @@ class PanguSettings(BaseSettings):
     def retry_bounds(cls, value: int) -> int:
         if not 0 <= value <= 5:
             raise ValueError("retries must be between 0 and 5")
+        return value
+
+    @field_validator("pangu_wake_cooldown_seconds")
+    @classmethod
+    def wake_cooldown_bounds(cls, value: float) -> float:
+        if not 0.5 <= value <= 15:
+            raise ValueError("wake cooldown must be between 0.5 and 15 seconds")
         return value
 
     @field_validator("pangu_gesture_camera_index")
