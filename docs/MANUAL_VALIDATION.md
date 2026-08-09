@@ -15,6 +15,56 @@ Run `GET /health` to inspect only sanitized database state. `GET /ready` returns
 
 With a valid local `GEMINI_API_KEY`, run `pangu model-health`, then `pangu route "research a topic"`. Confirm that health output never contains a key or prompt. Do not treat an unconfigured provider as a failed deterministic runtime.
 
+## Advanced Hey Pangu wake-word validation
+
+The production wake path uses the local sherpa-onnx open-vocabulary KWS provider in `wake_word.py`. It does not use Whisper to detect the wake phrase and it does not send microphone audio to Gemini.
+
+### Install the wake model
+
+1. Obtain the trusted SHA-256 for the exact sherpa-onnx KWS release archive you intend to use.
+2. Set `PANGU_WAKE_ARCHIVE_SHA256` locally. Do not commit it merely as a placeholder.
+3. Run `scripts/install-wake-model.ps1`.
+4. Confirm these files exist under `models/voice/wake/sherpa-kws`: `encoder.onnx`, `decoder.onnx`, `joiner.onnx`, `tokens.txt`, `keywords.txt`, `en.phone`, and `manifest.json`.
+5. Confirm the generated manifest contains hashes for installed artifacts.
+6. Start PANGU and confirm missing/corrupt artifacts report an unavailable/degraded wake state rather than a successful wake.
+
+### Positive wake tests
+
+Record results across multiple distances, speaking rates, and volumes. Test at minimum:
+
+- `Pangu`
+- `Hey Pangu`
+- `Hay Pangu`
+- a slightly lengthened final vowel such as `Hey Panguu`
+- near-field speech at approximately arm's length
+- far-field speech from across the room
+- normal, quiet, and moderately loud speech
+- different room noise levels
+
+Run at least 20 trials for each primary phrase (`Pangu` and `Hey Pangu`) before accepting the threshold configuration. Record successful detections, misses, and latency instead of reporting only subjective success.
+
+### Negative/false-trigger tests
+
+Leave PANGU listening while exposing the microphone to:
+
+- silence
+- fan/AC noise
+- keyboard typing
+- mouse clicks
+- music
+- television/video speech
+- normal conversation that does not contain PANGU
+- words with similar sounds such as `panda`, `bangle`, `thank you`, and `can you`
+- PANGU's own TTS output
+
+Confirm no expensive command transcription begins before a valid wake. Confirm the stale ring buffer is cleared after wake confirmation, cooldown blocks immediate duplicate triggers, and TTS suppression prevents self-retriggering.
+
+### Threshold tuning
+
+Tune keyword boosting and trigger thresholds in `keywords_raw.txt` only from measured false-accept/false-reject evidence. Do not simply lower thresholds until the positive examples work: every sensitivity increase must be retested against the negative corpus.
+
+A wake configuration is not production-validated until it passes repeated positive/negative trials on the target microphone and room conditions.
+
 ## Faster Whisper validation
 
 1. Place a compatible local Faster Whisper model directory at `models/voice/whisper`.
