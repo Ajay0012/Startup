@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 from queue import Full
 from threading import Event, Thread
-from time import monotonic, sleep
-from typing import cast
+from time import sleep
 
 from .events import EventEnvelope
 from .voice import AudioFrame, VoiceOutcome, VoiceSessionRuntime, VoiceState, WakeDetection
@@ -21,13 +20,7 @@ class WakePhrasePolicyVerifier:
 
 
 class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
-    """Always-on production voice runtime using the existing single voice lifecycle.
-
-    This class hardens the existing VoiceSessionRuntime rather than introducing a
-    competing microphone manager. It starts the existing bounded normalization
-    worker at lifecycle startup, adds one bounded wake watcher, clears stale audio
-    after wake detection, and shuts both workers down deterministically.
-    """
+    """Always-on production voice runtime using the existing single voice lifecycle."""
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
@@ -82,14 +75,20 @@ class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
             self.metrics["wake_suppressed"] += 1
             return
         self.metrics["wake_candidates"] += 1
+        await self._transition(VoiceState.SPEECH_CANDIDATE, "voice.speech.candidate")
+        await self._transition(VoiceState.WAKE_CANDIDATE, "voice.wake.candidate")
         policy = self.verifier.verify(self.frames.recent(3000), detection.normalized_keyword)
         if policy != VoiceOutcome.CONFIRMED:
             self.metrics["wake_rejections"] += 1
+            await self._transition(VoiceState.COOLDOWN, "voice.wake.rejected")
+            await self._transition(VoiceState.IDLE_LISTENING, "voice.wake.listening")
             return
         self.metrics["wake_confirmations"] += 1
+        await self._transition(VoiceState.WAKE_CONFIRMED, "voice.wake.confirmed")
         # Never let pre-wake/background audio leak into command capture.
         self.frames.clear()
         self.metrics["wake_buffer_clears"] += 1
+        await self._transition(VoiceState.COMMAND_LISTENING, "voice.command.listening")
         await self.events.publish(
             EventEnvelope(
                 "voice.wake.detected",
@@ -102,6 +101,42 @@ class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
                 },
             )
         )
+
+    async def begin_transcription(self) -> None:
+        if self.state == VoiceState.COMMAND_LISTENING:
+            await self._transition(VoiceState.TURN_ENDING, "voice.speech.ended")
+        if self.state == VoiceState.TURN_ENDING:
+            await self._transition(VoiceState.TRANSCRIBING, "voice.transcription.started")
+
+    async def mark_command_ready(self) -> None:
+        if self.state == VoiceState.TRANSCRIBING:
+            await self._transition(VoiceState.COMMAND_READY, "voice.command.ready")
+
+    async def finish_turn(self, reason: str) -> None:
+        await self.begin_transcription()
+        await self.mark_command_ready()
+        await self.events.publish(
+            EventEnvelope("voice.turn.ended", {"session_id": self.session_id, "reason": reason})
+        )
+
+    async def return_to_wake(self) -> None:
+        if self.state == VoiceState.COMMAND_READY:
+            await self._transition(VoiceState.COOLDOWN, "voice.cooldown.started")
+        if self.state == VoiceState.COOLDOWN:
+            await self._transition(VoiceState.IDLE_LISTENING, "voice.wake.listening")
+
+    async def fail_and_return_to_wake(self, reason: str) -> None:
+        if self.state == VoiceState.COMMAND_LISTENING:
+            await self.finish_turn(reason)
+        elif self.state == VoiceState.TURN_ENDING:
+            await self.begin_transcription()
+            await self.mark_command_ready()
+        elif self.state == VoiceState.TRANSCRIBING:
+            await self.mark_command_ready()
+        await self.events.publish(
+            EventEnvelope("voice.turn.failed", {"session_id": self.session_id, "reason": reason})
+        )
+        await self.return_to_wake()
 
     async def start(self, selector: str | None = None, capture: bool = True) -> None:
         self._runtime_loop = asyncio.get_running_loop()
@@ -136,7 +171,6 @@ class ProductionVoiceSessionRuntime(VoiceSessionRuntime):
             try:
                 self.queue.put_nowait(None)
             except Full:
-                # Drain one bounded item only to guarantee the stop sentinel fits.
                 try:
                     self.queue.get_nowait()
                     self.queue.task_done()
