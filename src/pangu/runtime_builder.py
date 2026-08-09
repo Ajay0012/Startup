@@ -42,6 +42,7 @@ from .production_voice import ProductionVoiceSessionRuntime, WakePhrasePolicyVer
 from .realtime_voice import RealtimeVoiceTurnCoordinator
 from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
+from .system_awareness import SystemAwarenessRuntime
 from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
 from .tts import WindowsSapiSpeechProvider
 from .voice import VadActivationService, VoiceSessionRuntime, WindowsAudioInputAdapter
@@ -82,6 +83,7 @@ class ServiceContainer:
     world_model: PersonalWorldModel
     missions: PersistentMissionRuntime
     awareness: ProactiveAwarenessRuntime
+    system_awareness: SystemAwarenessRuntime
     runtime: Runtime = field(init=False)
     realtime_voice: RealtimeVoiceTurnCoordinator | None = field(init=False, default=None)
 
@@ -109,6 +111,9 @@ class RuntimeBuilder:
         world_model = PersonalWorldModel(database)
         missions = PersistentMissionRuntime(database, events)
         awareness = ProactiveAwarenessRuntime(events, memory)
+        system_awareness = SystemAwarenessRuntime(
+            world_model, events, interval_seconds=settings.pangu_awareness_interval_seconds
+        )
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
         api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
@@ -280,6 +285,7 @@ class RuntimeBuilder:
             world_model,
             missions,
             awareness,
+            system_awareness,
         )
         from .runtime import Runtime
 
@@ -309,6 +315,15 @@ class RuntimeBuilder:
                 ("database", "events"),
             )
         )
+        if settings.pangu_awareness_enabled:
+            container.lifecycle.register(
+                LifecycleService(
+                    "system_awareness",
+                    container.system_awareness.start,
+                    container.system_awareness.stop,
+                    ("database", "events", "awareness"),
+                )
+            )
         if isinstance(container.voice, ProductionVoiceSessionRuntime):
             container.realtime_voice = RealtimeVoiceTurnCoordinator(
                 container.voice,
