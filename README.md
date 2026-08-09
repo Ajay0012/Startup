@@ -31,7 +31,9 @@ $env:PANGU_WAKE_ARCHIVE_SHA256 = '<trusted 64-character sha256>'
 ./scripts/install-wake-model.ps1
 ```
 
-Then run the documented microphone/noise validation in `docs/MANUAL_VALIDATION.md`. Do not treat model installation alone as proof of wake-word accuracy.
+The installer configures `Pangu`, `Hey Pangu`, `Hay Pangu`, and lengthened-vowel variants as separate KWS labels so the detector can be tuned against real accents without weakening the accepted-label boundary. Thresholds must be calibrated using positive and negative microphone samples; model installation by itself is not proof of wake-word accuracy.
+
+Run the microphone/noise procedure in `docs/MANUAL_VALIDATION.md` before marking wake recognition production-validated.
 
 ## Hand gestures
 
