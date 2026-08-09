@@ -20,6 +20,56 @@ class LanguageRuntime:
         clean = " ".join(text.strip().split())
         lower = clean.lower()
 
+        if lower in {"what's on screen", "what is on screen", "describe screen", "read screen"}:
+            return NormalizedIntent("screen_snapshot", "Describe the active screen", clean, confidence=0.98)
+        desktop = re.fullmatch(r"(?:click|press|invoke)\s+(?:the\s+)?(.+?)(?:\s+(?:button|control))?", lower)
+        if desktop:
+            return NormalizedIntent(
+                "invoke_control", clean, clean, {"target": desktop.group(1)}, 0.9
+            )
+        desktop = re.fullmatch(r"(?:focus)\s+(?:the\s+)?(.+?)(?:\s+control)?", lower)
+        if desktop:
+            return NormalizedIntent(
+                "focus_control", clean, clean, {"target": desktop.group(1)}, 0.9
+            )
+        desktop = re.fullmatch(r"type\s+(.+?)\s+(?:in|into)\s+(?:the\s+)?(.+)", clean, re.IGNORECASE)
+        if desktop:
+            return NormalizedIntent(
+                "set_control_text",
+                clean,
+                clean,
+                {"text": desktop.group(1), "target": desktop.group(2)},
+                0.9,
+            )
+
+        browse = re.fullmatch(r"(?:browse|navigate|go)\s+(?:to\s+)?(https?://\S+)", clean, re.IGNORECASE)
+        if browse:
+            return NormalizedIntent("browser_navigate", clean, clean, {"url": browse.group(1)}, 0.97)
+        if lower in {"read browser", "read browser page", "what's on this webpage", "what is on this webpage"}:
+            return NormalizedIntent("browser_read", "Read the current browser page", clean, confidence=0.97)
+        web_click = re.fullmatch(r"click\s+browser\s+(button|link)\s+(.+)", lower)
+        if web_click:
+            return NormalizedIntent(
+                "browser_click",
+                clean,
+                clean,
+                {"role": web_click.group(1), "target": web_click.group(2)},
+                0.96,
+            )
+        web_fill = re.fullmatch(r"fill\s+browser\s+(?:field|textbox)\s+(.+?)\s+with\s+(.+)", clean, re.IGNORECASE)
+        if web_fill:
+            return NormalizedIntent(
+                "browser_fill",
+                clean,
+                clean,
+                {"role": "textbox", "target": web_fill.group(1), "text": web_fill.group(2)},
+                0.96,
+            )
+        if lower in {"browser back", "go back in browser"}:
+            return NormalizedIntent("browser_back", clean, clean, confidence=0.97)
+        if lower in {"browser forward", "go forward in browser"}:
+            return NormalizedIntent("browser_forward", clean, clean, confidence=0.97)
+
         memory = re.fullmatch(r"remember(?: that)?\s+(.+)", lower)
         if memory:
             return NormalizedIntent(
