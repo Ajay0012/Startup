@@ -56,6 +56,9 @@ class PanguSettings(BaseSettings):
     pangu_wake_cooldown_seconds: float = 2.0
     pangu_awareness_enabled: bool = True
     pangu_awareness_interval_seconds: float = 5.0
+    pangu_browser_enabled: bool = False
+    pangu_browser_headless: bool = False
+    pangu_computer_use_enabled: bool = False
     pangu_gestures_enabled: bool = False
     pangu_gesture_camera_index: int = 0
     pangu_gesture_model_path: str = "models/vision/hand_landmarker.task"
