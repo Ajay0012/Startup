@@ -19,6 +19,45 @@ class LanguageRuntime:
     def normalize(self, text: str) -> NormalizedIntent:
         clean = " ".join(text.strip().split())
         lower = clean.lower()
+
+        memory = re.fullmatch(r"remember(?: that)?\s+(.+)", lower)
+        if memory:
+            return NormalizedIntent(
+                "remember",
+                f"Remember {memory.group(1)}",
+                clean,
+                {"memory": clean[clean.lower().find(memory.group(1)) :]},
+                0.97,
+            )
+        recall = re.fullmatch(r"(?:what do you remember about|recall|remember anything about)\s+(.+)", lower)
+        if recall:
+            return NormalizedIntent(
+                "recall_memory", clean, clean, {"query": recall.group(1)}, 0.96
+            )
+
+        app = re.fullmatch(
+            r"(focus|minimize|maximize|restore|close|restart)\s+(.+?)(?:\s+(?:app|application))?",
+            lower,
+        )
+        if app:
+            return NormalizedIntent(
+                f"{app.group(1)}_application",
+                clean,
+                clean,
+                {"application": clean[len(app.group(1)) + 1 :]},
+                0.95,
+            )
+        tanglish_app = re.fullmatch(r"(.+?)\s+ah\s+(focus|minimize|maximize|restore|close)\s+pannu", lower)
+        if tanglish_app:
+            return NormalizedIntent(
+                f"{tanglish_app.group(2)}_application",
+                clean,
+                clean,
+                {"application": tanglish_app.group(1)},
+                0.96,
+                "ta-en",
+            )
+
         system = re.fullmatch(r"(?:set )?volume\s+(\d{1,3})(?:\s+(?:ku )?set(?: pannu)?)?", lower)
         if system:
             return NormalizedIntent(
@@ -29,6 +68,8 @@ class LanguageRuntime:
                 0.97,
                 "ta-en" if "pannu" in lower or "ku" in lower else "en",
             )
+        if lower in {"volume", "volume level", "what is the volume"}:
+            return NormalizedIntent("get_volume", "Read system volume", clean, confidence=0.96)
         system = re.fullmatch(
             r"(?:increase|raise|decrease|lower)\s+volume(?:\s+(?:by )?(\d{1,3}))?", lower
         )
@@ -53,6 +94,8 @@ class LanguageRuntime:
                 0.97,
                 "ta-en" if "pannu" in lower or "ku" in lower else "en",
             )
+        if lower in {"brightness", "brightness level", "what is the brightness"}:
+            return NormalizedIntent("get_brightness", "Read display brightness", clean, confidence=0.96)
         system = re.fullmatch(
             r"(?:increase|raise|decrease|lower)\s+brightness(?:\s+(?:by )?(\d{1,3}))?", lower
         )
@@ -75,13 +118,19 @@ class LanguageRuntime:
             )
         if lower in {"unmute", "toggle mute"}:
             return NormalizedIntent(lower.replace(" ", "_"), lower.title(), clean, confidence=0.97)
+        if lower in {"mute state", "are you muted", "is volume muted"}:
+            return NormalizedIntent("get_mute_state", "Read mute state", clean, confidence=0.96)
+
         for pattern, name, english in self._rules:
             match = re.fullmatch(pattern, lower)
             if match:
                 entities = {"name": match.group(1)} if name == "create_folder" else {}
+                if name == "open_application":
+                    application = "Google Chrome" if "chrome" in lower else "Visual Studio Code"
+                    entities = {"application": application}
                 return NormalizedIntent(
                     name,
-                    english if not entities else f"Create folder {match.group(1)}",
+                    english if not entities or name == "open_application" else f"Create folder {match.group(1)}",
                     clean,
                     entities,
                     0.98,
