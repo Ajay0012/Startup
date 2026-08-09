@@ -16,8 +16,9 @@ from .capabilities import CapabilityCatalog, ToolSpecification
 from .contracts import Risk
 from .database import DatabaseService
 from .events import EventBus
+from .gestures import GestureRuntime, MediaPipeHandTracker, TemporalGestureRecognizer
 from .language import LanguageRuntime
-from .lifecycle import LifecycleKernel
+from .lifecycle import LifecycleKernel, LifecycleService
 from .model_runtime import (
     CircuitBreaker,
     CloudContextSanitizer,
@@ -73,6 +74,7 @@ class ServiceContainer:
     application_control: ApplicationControlRuntime
     system_control: SystemControlRuntime
     voice: VoiceSessionRuntime
+    gesture: GestureRuntime
     runtime: Runtime = field(init=False)
 
 
@@ -226,6 +228,15 @@ class RuntimeBuilder:
             events,
             LanguageRuntime(),
         )
+        gesture = GestureRuntime(
+            MediaPipeHandTracker(
+                self._root / settings.pangu_gesture_model_path,
+                camera_index=settings.pangu_gesture_camera_index,
+                max_hands=2,
+            ),
+            TemporalGestureRecognizer(),
+            events,
+        )
         container = ServiceContainer(
             self._root,
             settings,
@@ -249,6 +260,7 @@ class RuntimeBuilder:
             app_control,
             system_control,
             voice,
+            gesture,
         )
         from .runtime import Runtime
 
@@ -267,4 +279,8 @@ class RuntimeBuilder:
             container.system_control,
             container.voice,
         )
+        if settings.pangu_gestures_enabled:
+            container.lifecycle.register(
+                LifecycleService("gesture", container.gesture.start, container.gesture.stop, ("events",))
+            )
         return container
