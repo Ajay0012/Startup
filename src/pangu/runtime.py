@@ -13,7 +13,15 @@ from .applications import (
     ResolutionStatus,
     VerificationState,
 )
+from .browser import BrowserActionKind, BrowserActionRequest, BrowserRuntime, BrowserState
 from .capabilities import CapabilityCatalog
+from .computer_use import (
+    ComputerActionKind,
+    ComputerActionRequest,
+    ComputerTarget,
+    ComputerUseRuntime,
+    ComputerUseState,
+)
 from .contracts import CommandEnvelope, Status, ToolRequest, ToolResult
 from .database import DatabaseService
 from .events import EventBus, EventEnvelope
@@ -30,6 +38,7 @@ from .model_runtime import (
     ModelRouter,
 )
 from .permissions import PermissionGrant, PermissionStore
+from .screen_perception import ScreenPerceptionRuntime
 from .security import ApprovalStore, SafetyGateway
 from .system_control import SystemControlResult, SystemControlRuntime, SystemVerification
 from .tools import ToolRuntime
@@ -58,6 +67,9 @@ class Runtime:
         memory: PersistentMemoryRuntime | None = None,
         world_model: PersonalWorldModel | None = None,
         missions: PersistentMissionRuntime | None = None,
+        screen: ScreenPerceptionRuntime | None = None,
+        computer_use: ComputerUseRuntime | None = None,
+        browser: BrowserRuntime | None = None,
     ) -> None:
         self.root, self.settings = root, settings
         self.db, self.lifecycle, self.events, self.catalog = database, lifecycle, events, catalog
@@ -74,9 +86,10 @@ class Runtime:
         self.memory = memory
         self.world_model = world_model
         self.missions = missions
+        self.screen = screen
+        self.computer_use = computer_use
+        self.browser = browser
         grants = PermissionStore((PermissionGrant("filesystem.write:*", "default"),))
-        # Legacy generic tools currently expose only read/low-risk operations. High-risk
-        # Windows controls use their persistent exact-approval runtimes instead.
         self.approvals = ApprovalStore()
         self.tools = ToolRuntime(root, self.safety, self.catalog, grants, self.approvals)
         self.started = False
@@ -158,6 +171,16 @@ class Runtime:
             "decrease_brightness",
             "remember",
             "recall_memory",
+            "screen_snapshot",
+            "invoke_control",
+            "focus_control",
+            "set_control_text",
+            "browser_navigate",
+            "browser_read",
+            "browser_click",
+            "browser_fill",
+            "browser_back",
+            "browser_forward",
         }
         route = self.model_router.route(intent.canonical_english, deterministic)
         return self.cognitive_engine.decide(intent.intent_name, route, intent.original_text)
@@ -195,7 +218,9 @@ class Runtime:
             if not result.normalized_error
             else f"{result.requested_target}: {result.normalized_error}"
         )
-        return ToolResult(request_id, status, message, dict(result.evidence), {"confidence": result.confidence})
+        return ToolResult(
+            request_id, status, message, dict(result.evidence), {"confidence": result.confidence}
+        )
 
     def _remember_turn(self, command: CommandEnvelope, intent_name: str, result: ToolResult) -> None:
         if self.memory is None:
@@ -255,6 +280,129 @@ class Runtime:
             {"health": result.health.value, "error": str(result.error) if result.error else None},
         )
 
+    def _screen_result(self, command: CommandEnvelope) -> ToolResult:
+        if self.screen is None:
+            return ToolResult(command.command_id, Status.UNVERIFIED, "Screen perception is unavailable.")
+        snapshot = self.screen.capture()
+        if snapshot.verification_state != "VERIFIED":
+            return ToolResult(
+                command.command_id,
+                Status.UNVERIFIED,
+                "I couldn't read the active Windows accessibility tree.",
+                {"backend": snapshot.backend},
+                {"error": snapshot.normalized_error},
+            )
+        names = [
+            f"{item.control_type}: {item.name}"
+            for item in snapshot.elements
+            if item.name and not item.is_password
+        ][:12]
+        description = (
+            f"Active window: {snapshot.active_window_title or 'untitled'}. "
+            + ("Visible controls include " + "; ".join(names) if names else "No named controls found.")
+        )
+        return ToolResult(
+            command.command_id,
+            Status.VERIFIED,
+            description,
+            {
+                "active_window_handle": snapshot.active_window_handle,
+                "element_count": len(snapshot.elements),
+                "truncated": snapshot.truncated,
+            },
+        )
+
+    def _computer_result(self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]) -> ToolResult:
+        if self.computer_use is None or not bool(getattr(self.settings, "pangu_computer_use_enabled", False)):
+            return ToolResult(
+                command.command_id,
+                Status.DENIED,
+                "Computer-use is disabled. Enable PANGU_COMPUTER_USE_ENABLED to allow typed UI Automation actions.",
+            )
+        action = {
+            "invoke_control": ComputerActionKind.INVOKE,
+            "focus_control": ComputerActionKind.FOCUS,
+            "set_control_text": ComputerActionKind.SET_TEXT,
+        }[intent_name]
+        native = self.computer_use.execute(
+            ComputerActionRequest(
+                action,
+                ComputerTarget(name=entities.get("target", "")),
+                text=entities.get("text"),
+            )
+        )
+        status = (
+            Status.VERIFIED
+            if native.state == ComputerUseState.VERIFIED
+            else Status.DENIED
+            if native.state == ComputerUseState.DENIED
+            else Status.FAILED
+            if native.state == ComputerUseState.FAILED
+            else Status.UNVERIFIED
+        )
+        return ToolResult(
+            command.command_id,
+            status,
+            native.message,
+            dict(native.evidence),
+            {"error": native.normalized_error},
+        )
+
+    def _browser_result(self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]) -> ToolResult:
+        if self.browser is None or not bool(getattr(self.settings, "pangu_browser_enabled", False)):
+            return ToolResult(
+                command.command_id,
+                Status.DENIED,
+                "PANGU browser automation is disabled. Enable PANGU_BROWSER_ENABLED to use the isolated browser.",
+            )
+        request = (
+            BrowserActionRequest(BrowserActionKind.NAVIGATE, url=entities.get("url"))
+            if intent_name == "browser_navigate"
+            else BrowserActionRequest(BrowserActionKind.READ)
+            if intent_name == "browser_read"
+            else BrowserActionRequest(
+                BrowserActionKind.CLICK,
+                target_name=entities.get("target"),
+                target_role=entities.get("role"),
+            )
+            if intent_name == "browser_click"
+            else BrowserActionRequest(
+                BrowserActionKind.FILL,
+                target_name=entities.get("target"),
+                target_role=entities.get("role"),
+                text=entities.get("text"),
+            )
+            if intent_name == "browser_fill"
+            else BrowserActionRequest(BrowserActionKind.BACK)
+            if intent_name == "browser_back"
+            else BrowserActionRequest(BrowserActionKind.FORWARD)
+        )
+        native = asyncio.run(self.browser.execute(request))
+        status = (
+            Status.VERIFIED
+            if native.state == BrowserState.VERIFIED
+            else Status.DENIED
+            if native.state == BrowserState.DENIED
+            else Status.FAILED
+            if native.state == BrowserState.FAILED
+            else Status.UNVERIFIED
+        )
+        message = native.message
+        if request.action == BrowserActionKind.READ and native.snapshot is not None:
+            page = native.snapshot
+            excerpt = " ".join(page.text.split())[:1200]
+            message = f"{page.title or 'Web page'}: {excerpt}" if excerpt else page.title or native.message
+        return ToolResult(
+            command.command_id,
+            status,
+            message,
+            {
+                "url": native.snapshot.url if native.snapshot else None,
+                "untrusted_content": native.snapshot.untrusted_content if native.snapshot else True,
+            },
+            {"error": native.normalized_error},
+        )
+
     def command(self, text: str, source: str = "cli") -> ToolResult:
         if not self.started:
             raise RuntimeError("runtime not started")
@@ -263,10 +411,13 @@ class Runtime:
         record_original = True
 
         if intent.intent_name == "create_folder":
-            request = ToolRequest(
-                "filesystem", "create_folder", {"name": intent.entities.get("name", "New Folder")}
+            result = self.tools.execute(
+                ToolRequest(
+                    "filesystem",
+                    "create_folder",
+                    {"name": intent.entities.get("name", "New Folder")},
+                )
             )
-            result = self.tools.execute(request)
         elif intent.intent_name == "battery_status":
             result = self.tools.execute(ToolRequest("system", "battery_status", {}))
         elif intent.intent_name in {
@@ -279,8 +430,9 @@ class Runtime:
             "restart_application",
         }:
             operation = intent.intent_name.removesuffix("_application")
-            app_name = intent.entities.get("application", "").strip()
-            app_result = self.application_control.operate(operation, app_name)
+            app_result = self.application_control.operate(
+                operation, intent.entities.get("application", "").strip()
+            )
             result = self._application_result(command.command_id, app_result)
         elif intent.intent_name in {
             "get_volume",
@@ -299,9 +451,10 @@ class Runtime:
             )
             raw_value = intent.entities.get("value", intent.entities.get("step"))
             value = int(raw_value) if raw_value is not None else None
-            system_result = self.system_control.audio(operation, value)
-            result = self._system_result(command.command_id, system_result)
-            record_original = False  # SystemControlRuntime already emits its verified audit record.
+            result = self._system_result(
+                command.command_id, self.system_control.audio(operation, value)
+            )
+            record_original = False
         elif intent.intent_name in {
             "get_brightness",
             "set_brightness",
@@ -310,9 +463,23 @@ class Runtime:
         }:
             raw_value = intent.entities.get("value", intent.entities.get("step"))
             value = int(raw_value) if raw_value is not None else None
-            system_result = self.system_control.brightness(intent.intent_name, value)
-            result = self._system_result(command.command_id, system_result)
+            result = self._system_result(
+                command.command_id, self.system_control.brightness(intent.intent_name, value)
+            )
             record_original = False
+        elif intent.intent_name == "screen_snapshot":
+            result = self._screen_result(command)
+        elif intent.intent_name in {"invoke_control", "focus_control", "set_control_text"}:
+            result = self._computer_result(command, intent.intent_name, intent.entities)
+        elif intent.intent_name in {
+            "browser_navigate",
+            "browser_read",
+            "browser_click",
+            "browser_fill",
+            "browser_back",
+            "browser_forward",
+        }:
+            result = self._browser_result(command, intent.intent_name, intent.entities)
         elif intent.intent_name == "remember" and self.memory is not None:
             text_to_remember = intent.entities.get("memory", "").strip()
             memory = self.memory.remember(
