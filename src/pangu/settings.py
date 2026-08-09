@@ -53,6 +53,9 @@ class PanguSettings(BaseSettings):
     pangu_allow_screenshot_upload: bool = False
     pangu_allow_document_upload: bool = False
     pangu_redact_sensitive_data: bool = True
+    pangu_gestures_enabled: bool = False
+    pangu_gesture_camera_index: int = 0
+    pangu_gesture_model_path: str = "models/vision/hand_landmarker.task"
 
     @field_validator("gemini_api_key", mode="before")
     @classmethod
@@ -78,6 +81,13 @@ class PanguSettings(BaseSettings):
     def retry_bounds(cls, value: int) -> int:
         if not 0 <= value <= 5:
             raise ValueError("retries must be between 0 and 5")
+        return value
+
+    @field_validator("pangu_gesture_camera_index")
+    @classmethod
+    def camera_index_bounds(cls, value: int) -> int:
+        if not 0 <= value <= 32:
+            raise ValueError("gesture camera index must be between 0 and 32")
         return value
 
     @classmethod
