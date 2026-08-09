@@ -13,6 +13,7 @@ dependencies = ["fastapi>=0.115", "uvicorn>=0.34", "pydantic>=2.10", "pydantic-s
 dev = ["pytest>=8.3", "pytest-asyncio>=0.25", "ruff>=0.9", "mypy>=1.14", "httpx>=0.28"]
 vision = ["mediapipe>=0.10.35", "opencv-python>=4.10"]
 desktop = ["pywinauto>=0.6.8", "pillow>=10.4"]
+browser = ["playwright>=1.50"]
 
 [project.scripts]
 pangu = "pangu.cli:main"
