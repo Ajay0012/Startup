@@ -54,6 +54,8 @@ class PanguSettings(BaseSettings):
     pangu_allow_document_upload: bool = False
     pangu_redact_sensitive_data: bool = True
     pangu_wake_cooldown_seconds: float = 2.0
+    pangu_awareness_enabled: bool = True
+    pangu_awareness_interval_seconds: float = 5.0
     pangu_gestures_enabled: bool = False
     pangu_gesture_camera_index: int = 0
     pangu_gesture_model_path: str = "models/vision/hand_landmarker.task"
@@ -89,6 +91,13 @@ class PanguSettings(BaseSettings):
     def wake_cooldown_bounds(cls, value: float) -> float:
         if not 0.5 <= value <= 15:
             raise ValueError("wake cooldown must be between 0.5 and 15 seconds")
+        return value
+
+    @field_validator("pangu_awareness_interval_seconds")
+    @classmethod
+    def awareness_interval_bounds(cls, value: float) -> float:
+        if not 1 <= value <= 300:
+            raise ValueError("awareness interval must be between 1 and 300 seconds")
         return value
 
     @field_validator("pangu_gesture_camera_index")
