@@ -13,7 +13,9 @@ from .applications import (
 )
 from .approvals import PersistentApprovalService
 from .awareness import ProactiveAwarenessRuntime
+from .browser import BrowserRuntime, PlaywrightBrowserAdapter
 from .capabilities import CapabilityCatalog, ToolSpecification
+from .computer_use import ComputerUseRuntime
 from .contracts import Risk
 from .database import DatabaseService
 from .events import EventBus
@@ -40,6 +42,7 @@ from .model_runtime import (
 from .permissions import PermissionGrant, PermissionStore
 from .production_voice import ProductionVoiceSessionRuntime, WakePhrasePolicyVerifier
 from .realtime_voice import RealtimeVoiceTurnCoordinator
+from .screen_perception import ScreenPerceptionRuntime
 from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
 from .system_awareness import SystemAwarenessRuntime
@@ -84,6 +87,9 @@ class ServiceContainer:
     missions: PersistentMissionRuntime
     awareness: ProactiveAwarenessRuntime
     system_awareness: SystemAwarenessRuntime
+    screen: ScreenPerceptionRuntime
+    computer_use: ComputerUseRuntime
+    browser: BrowserRuntime
     runtime: Runtime = field(init=False)
     realtime_voice: RealtimeVoiceTurnCoordinator | None = field(init=False, default=None)
 
@@ -113,6 +119,14 @@ class RuntimeBuilder:
         awareness = ProactiveAwarenessRuntime(events, memory)
         system_awareness = SystemAwarenessRuntime(
             world_model, events, interval_seconds=settings.pangu_awareness_interval_seconds
+        )
+        screen = ScreenPerceptionRuntime()
+        computer_use = ComputerUseRuntime(screen)
+        browser = BrowserRuntime(
+            PlaywrightBrowserAdapter(
+                self._root / "runtime-data" / "browser" / "profile",
+                headless=settings.pangu_browser_headless,
+            )
         )
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
@@ -286,6 +300,9 @@ class RuntimeBuilder:
             missions,
             awareness,
             system_awareness,
+            screen,
+            computer_use,
+            browser,
         )
         from .runtime import Runtime
 
@@ -306,6 +323,9 @@ class RuntimeBuilder:
             container.memory,
             container.world_model,
             container.missions,
+            container.screen,
+            container.computer_use,
+            container.browser,
         )
         container.lifecycle.register(
             LifecycleService(
@@ -323,6 +343,10 @@ class RuntimeBuilder:
                     container.system_awareness.stop,
                     ("database", "events", "awareness"),
                 )
+            )
+        if settings.pangu_browser_enabled:
+            container.lifecycle.register(
+                LifecycleService("browser", container.browser.start, container.browser.stop, ("events",))
             )
         if isinstance(container.voice, ProductionVoiceSessionRuntime):
             container.realtime_voice = RealtimeVoiceTurnCoordinator(
