@@ -38,13 +38,12 @@ from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
 from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
 from .voice import (
-    FakeTranscriptionProvider,
-    FakeWakePhraseVerifier,
     SherpaOnnxWakeWordEngine,
     VadActivationService,
     VoiceSessionRuntime,
     WindowsAudioInputAdapter,
 )
+from .voice_providers import FasterWhisperTranscriptionProvider, TranscriptionWakePhraseVerifier
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -215,12 +214,15 @@ class RuntimeBuilder:
             / "manifest.json"
         )
         vad = VadActivationService(self._root / "models", manifest_path).activate()
+        transcriber = FasterWhisperTranscriptionProvider(
+            self._root / "models" / "voice" / "whisper"
+        )
         voice = self._voice_runtime or VoiceSessionRuntime(
             WindowsAudioInputAdapter(),
             vad,
             SherpaOnnxWakeWordEngine(),
-            FakeWakePhraseVerifier(),
-            FakeTranscriptionProvider(),
+            TranscriptionWakePhraseVerifier(transcriber),
+            transcriber,
             events,
             LanguageRuntime(),
         )
