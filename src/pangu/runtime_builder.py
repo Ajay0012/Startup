@@ -12,6 +12,7 @@ from .applications import (
     WindowsApplicationAdapter,
 )
 from .approvals import PersistentApprovalService
+from .awareness import ProactiveAwarenessRuntime
 from .capabilities import CapabilityCatalog, ToolSpecification
 from .contracts import Risk
 from .database import DatabaseService
@@ -19,6 +20,8 @@ from .events import EventBus
 from .gestures import GestureRuntime, MediaPipeHandTracker, TemporalGestureRecognizer
 from .language import LanguageRuntime
 from .lifecycle import LifecycleKernel, LifecycleService
+from .memory import PersistentMemoryRuntime
+from .missions import PersistentMissionRuntime
 from .model_runtime import (
     CircuitBreaker,
     CloudContextSanitizer,
@@ -44,6 +47,7 @@ from .tts import WindowsSapiSpeechProvider
 from .voice import VadActivationService, VoiceSessionRuntime, WindowsAudioInputAdapter
 from .voice_providers import FasterWhisperTranscriptionProvider
 from .wake_word import SherpaKeywordSpotterWakeWordEngine, load_wake_word_config
+from .world_model import PersonalWorldModel
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -74,6 +78,10 @@ class ServiceContainer:
     system_control: SystemControlRuntime
     voice: VoiceSessionRuntime
     gesture: GestureRuntime
+    memory: PersistentMemoryRuntime
+    world_model: PersonalWorldModel
+    missions: PersistentMissionRuntime
+    awareness: ProactiveAwarenessRuntime
     runtime: Runtime = field(init=False)
     realtime_voice: RealtimeVoiceTurnCoordinator | None = field(init=False, default=None)
 
@@ -97,6 +105,10 @@ class RuntimeBuilder:
         settings = PanguSettings.load_root(self._root)
         database = DatabaseService(self._root / "runtime-data" / "database" / "pangu.db")
         events = EventBus()
+        memory = PersistentMemoryRuntime(database)
+        world_model = PersonalWorldModel(database)
+        missions = PersistentMissionRuntime(database, events)
+        awareness = ProactiveAwarenessRuntime(events, memory)
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
         api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
@@ -264,6 +276,10 @@ class RuntimeBuilder:
             system_control,
             voice,
             gesture,
+            memory,
+            world_model,
+            missions,
+            awareness,
         )
         from .runtime import Runtime
 
@@ -281,6 +297,17 @@ class RuntimeBuilder:
             container.application_control,
             container.system_control,
             container.voice,
+            container.memory,
+            container.world_model,
+            container.missions,
+        )
+        container.lifecycle.register(
+            LifecycleService(
+                "awareness",
+                container.awareness.start,
+                container.awareness.stop,
+                ("database", "events"),
+            )
         )
         if isinstance(container.voice, ProductionVoiceSessionRuntime):
             container.realtime_voice = RealtimeVoiceTurnCoordinator(
