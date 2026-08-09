@@ -34,6 +34,8 @@ REQUIRED_TABLES = {
     "application_aliases",
     "application_evidence",
     "application_discovery_runs",
+    "memory_records",
+    "world_facts",
 }
 
 
@@ -46,7 +48,7 @@ def test_empty_database_migrates_to_head_with_sqlite_guards(tmp_path: Path) -> N
         with database._engine.connect() as connection:
             assert (
                 connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
-                == "0004_application_catalog_constraints"
+                == "0005_persistent_intelligence"
             )
     finally:
         database.stop()
@@ -65,7 +67,7 @@ def test_migration_startup_is_idempotent_and_reopens(tmp_path: Path) -> None:
         second.stop()
 
 
-def test_existing_0003_database_upgrades_to_0004(tmp_path: Path) -> None:
+def test_existing_0003_database_upgrades_to_current_head(tmp_path: Path) -> None:
     path = tmp_path / "database" / "pangu.db"
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -75,10 +77,7 @@ def test_existing_0003_database_upgrades_to_0004(tmp_path: Path) -> None:
     upgraded = DatabaseService(path)
     upgraded.start()
     try:
-        assert (
-            upgraded.health_details()["migration_revision"]
-            == "0004_application_catalog_constraints"
-        )
+        assert upgraded.health_details()["migration_revision"] == "0005_persistent_intelligence"
     finally:
         upgraded.stop()
 
@@ -126,7 +125,9 @@ def test_application_catalog_constraints_and_cascade(tmp_path: Path) -> None:
                 ApplicationEvidenceRow(application_id="missing", source="test", evidence={})
             )
         with database.transaction() as session:
-            session.delete(session.get(ApplicationCatalogRow, "app"))
+            row = session.get(ApplicationCatalogRow, "app")
+            assert row is not None
+            session.delete(row)
         with database.transaction() as session:
             assert session.query(ApplicationAliasRow).count() == 0
             assert session.query(ApplicationEvidenceRow).count() == 0
