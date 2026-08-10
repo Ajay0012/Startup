@@ -417,11 +417,11 @@ class Runtime:
         )
 
     def _media_result(self, command: CommandEnvelope, entities: dict[str, str]) -> ToolResult:
-        if self.media is None or not bool(getattr(self.settings, "pangu_browser_enabled", False)):
+        if self.media is None or not bool(getattr(self.settings, "pangu_media_enabled", True)):
             return ToolResult(
                 command.command_id,
                 Status.DENIED,
-                "Media playback needs the isolated PANGU browser. Enable PANGU_BROWSER_ENABLED first.",
+                "PANGU media playback is disabled. Enable PANGU_MEDIA_ENABLED to allow media playback.",
             )
         native = asyncio.run(
             self.media.play(
