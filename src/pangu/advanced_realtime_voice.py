@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from time import monotonic
+from typing import TYPE_CHECKING
 
 from .conversation_intelligence import (
     ConversationAct,
@@ -17,6 +18,9 @@ from .production_voice import ProductionVoiceSessionRuntime
 from .realtime_voice import BargeInPolicy, RealtimeVoiceTurnCoordinator
 from .tts import SpeechOutputProvider
 from .voice import AudioFrame, SpeechSegment, SpeechSegmentController, VadConfiguration
+
+if TYPE_CHECKING:
+    from .runtime import Runtime
 
 
 @dataclass(frozen=True)
@@ -52,13 +56,13 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
     def __init__(
         self,
         voice: ProductionVoiceSessionRuntime,
-        runtime: object,
+        runtime: Runtime,
         events: EventBus,
         speaker: SpeechOutputProvider,
         barge_in: BargeInPolicy | None = None,
         policy: FullDuplexPolicy | None = None,
     ) -> None:
-        super().__init__(voice, runtime, events, speaker, barge_in)  # type: ignore[arg-type]
+        super().__init__(voice, runtime, events, speaker, barge_in)
         self.full_duplex = policy or FullDuplexPolicy()
         self.partial_stabilizer = PartialTranscriptStabilizer(stable_repetitions=2)
         self.turn_detector = SemanticEndOfTurnDetector()
@@ -173,10 +177,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                 partial_due = now + self.full_duplex.partial_interval_seconds
                 partial_text = await self._partial_transcribe(tuple(rolling)) or partial_text
 
-            if (
-                partial_text
-                and silence_ms >= self.full_duplex.semantic_minimum_silence_ms
-            ):
+            if partial_text and silence_ms >= self.full_duplex.semantic_minimum_silence_ms:
                 decision = self.turn_detector.decide(
                     partial_text,
                     silence_ms=silence_ms,
