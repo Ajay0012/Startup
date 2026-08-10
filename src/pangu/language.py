@@ -20,6 +20,52 @@ class LanguageRuntime:
         clean = " ".join(text.strip().split())
         lower = clean.lower()
 
+        direct_media = re.fullmatch(r"play\s+(https?://\S+)", clean, re.IGNORECASE)
+        if direct_media:
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": direct_media.group(1), "url": direct_media.group(1), "source": "direct"},
+                0.99,
+            )
+        media = re.fullmatch(
+            r"play\s+(.+?)\s+(?:on|from)\s+(youtube|yt|vimeo|dailymotion|daily motion|archive(?:\.org)?)",
+            clean,
+            re.IGNORECASE,
+        )
+        if media:
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": media.group(1), "source": media.group(2)},
+                0.98,
+            )
+        tanglish_media = re.fullmatch(
+            r"(?:youtube|yt|vimeo|dailymotion|archive)(?:\s+la)?\s+(.+?)\s+play\s+pannu",
+            lower,
+        )
+        if tanglish_media:
+            provider = lower.split()[0]
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": tanglish_media.group(1), "source": provider},
+                0.98,
+                "ta-en",
+            )
+        generic_media = re.fullmatch(r"play\s+(.+)", clean, re.IGNORECASE)
+        if generic_media:
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": generic_media.group(1), "source": "auto"},
+                0.92,
+            )
+
         if lower in {"what's on screen", "what is on screen", "describe screen", "read screen"}:
             return NormalizedIntent("screen_snapshot", "Describe the active screen", clean, confidence=0.98)
         desktop = re.fullmatch(r"(?:click|press|invoke)\s+(?:the\s+)?(.+?)(?:\s+(?:button|control))?", lower)
