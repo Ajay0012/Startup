@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -15,9 +15,9 @@ from .conversation_intelligence import (
 )
 from .events import EventBus, EventEnvelope, EventPriority
 from .production_voice import ProductionVoiceSessionRuntime
-from .realtime_voice import BargeInPolicy, RealtimeVoiceTurnCoordinator
+from .realtime_voice import BargeInPolicy, RealtimeTurnMetrics, RealtimeVoiceTurnCoordinator
 from .tts import SpeechOutputProvider
-from .voice import AudioFrame, SpeechSegment, SpeechSegmentController, VadConfiguration
+from .voice import AudioFrame, SpeechSegment, SpeechSegmentController, VadConfiguration, VoiceState
 
 if TYPE_CHECKING:
     from .runtime import Runtime
@@ -69,6 +69,8 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
         self.act_classifier = ConversationActClassifier()
         self.repair_state = ConversationRepairState()
         self._last_response_text: str | None = None
+        self._pending_response_chunks: tuple[str, ...] = ()
+        self._pending_chunk_index = 0
 
     @staticmethod
     def _chunk_response(text: str, maximum_words: int) -> tuple[str, ...]:
@@ -97,7 +99,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
             return ""
         hypothesis = self.partial_stabilizer.update(
             result.normalized_transcript,
-            confidence=max(0.0, min(1.0, result.language_probability or 0.0)),
+            confidence=0.5 if result.normalized_transcript else 0.0,
             is_final=False,
         )
         await self.events.publish(
@@ -108,6 +110,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                     "text": hypothesis.text,
                     "stable_prefix": hypothesis.stable_prefix,
                     "confidence": hypothesis.confidence,
+                    "confidence_source": "rolling_stability_not_asr_probability",
                 },
                 EventPriority.LOW,
             )
@@ -138,7 +141,11 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
         rolling: deque[AudioFrame] = deque()
         retained_samples = 0
         maximum_samples = int(
-            self.voice.config.sample_rate * self.full_duplex.maximum_partial_audio_seconds
+            self.voice.config.sample_rate
+            * min(
+                self.full_duplex.partial_window_seconds,
+                self.full_duplex.maximum_partial_audio_seconds,
+            )
         )
         self.partial_stabilizer.reset()
 
@@ -206,12 +213,10 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
         delay = ((first_speech_at or monotonic()) - started) * 1000
         return terminal, delay
 
-    async def _speak_with_barge_in(self, text: str) -> int | None:
-        chunks = self._chunk_response(text, self.full_duplex.response_chunk_words)
-        if not chunks:
-            return None
-        self._last_response_text = text
-        for index, chunk in enumerate(chunks):
+    async def _speak_chunks(self, chunks: tuple[str, ...], start_index: int = 0) -> int | None:
+        for index in range(start_index, len(chunks)):
+            chunk = chunks[index]
+            self._pending_chunk_index = index
             await self.events.publish(
                 EventEnvelope(
                     "voice.response.chunk",
@@ -226,8 +231,28 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
             )
             barge_sequence = await super()._speak_with_barge_in(chunk)
             if barge_sequence is not None:
+                self._pending_chunk_index = index
                 return barge_sequence
+        self._pending_response_chunks = ()
+        self._pending_chunk_index = 0
         return None
+
+    async def _speak_with_barge_in(self, text: str) -> int | None:
+        chunks = self._chunk_response(text, self.full_duplex.response_chunk_words)
+        if not chunks:
+            return None
+        self._last_response_text = text
+        self._pending_response_chunks = chunks
+        self._pending_chunk_index = 0
+        return await self._speak_chunks(chunks)
+
+    async def _continue_response(self) -> int | None:
+        if not self._pending_response_chunks:
+            return None
+        return await self._speak_chunks(
+            self._pending_response_chunks,
+            self._pending_chunk_index,
+        )
 
     async def classify_conversational_utterance(self, text: str) -> ConversationAct:
         act = self.act_classifier.classify(text)
@@ -245,15 +270,168 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
         )
         return act
 
-    async def handle_backchannel(self, text: str) -> bool:
-        """Handle short dialogue-control utterances without invoking the tool runtime."""
-        act = await self.classify_conversational_utterance(text)
-        if act == ConversationAct.CANCEL:
-            await self.speaker.interrupt()
-            return True
-        if act == ConversationAct.BACKCHANNEL:
-            return True
-        if act == ConversationAct.CONTINUE and self._last_response_text:
-            await self._speak_with_barge_in(self._last_response_text)
-            return True
-        return False
+    async def _continue_listening(self, minimum_sequence: int) -> int:
+        await self.voice.mark_command_ready()
+        await self.voice.begin_barge_in()
+        self.voice.vad.reset()
+        return max(minimum_sequence, self.voice._sequence)
+
+    async def _run_turn(self, wake_event: EventEnvelope) -> None:
+        turn_started = monotonic()
+        minimum_sequence = 0
+        wake_to_speech_ms = 0.0
+        speech_to_transcript_ms = 0.0
+        transcript_to_result_ms = 0.0
+        result_to_speech_ms = 0.0
+        conversational_turns = 0
+        try:
+            for followup in range(self.barge_in.maximum_followups + 1):
+                if self.voice.state != VoiceState.COMMAND_LISTENING:
+                    return
+                conversational_turns += 1
+                await self.events.publish(
+                    EventEnvelope(
+                        "voice.command.capture.started",
+                        {
+                            "session_id": self.voice.session_id,
+                            "wake_event_id": wake_event.event_id,
+                            "conversational_turn": conversational_turns,
+                        },
+                    )
+                )
+                segment, wake_to_speech_ms = await self._capture_command(minimum_sequence)
+                if segment is None:
+                    self.failed_turns += 1
+                    await self.voice.finish_turn("NO_COMMAND_SPEECH")
+                    barge_sequence = await self._speak_with_barge_in("I didn't catch that.")
+                    if barge_sequence is not None and followup < self.barge_in.maximum_followups:
+                        await self.voice.begin_barge_in()
+                        self.voice.vad.reset()
+                        minimum_sequence = barge_sequence
+                        continue
+                    await self.voice.return_to_wake()
+                    return
+
+                await self.voice.begin_transcription()
+                speech_ended = monotonic()
+                transcription = await asyncio.to_thread(
+                    self.voice.transcriber.transcribe,
+                    (AudioFrame(tuple(segment.samples), segment.start_timestamp, 1),),
+                )
+                speech_to_transcript_ms = (monotonic() - speech_ended) * 1000
+                segment.clear_samples()
+                text = transcription.normalized_transcript.strip()
+                if transcription.normalized_error or not text:
+                    self.failed_turns += 1
+                    await self.events.publish(
+                        EventEnvelope(
+                            "voice.transcription.failed",
+                            {
+                                "session_id": self.voice.session_id,
+                                "normalized_error": transcription.normalized_error
+                                or "EMPTY_TRANSCRIPT",
+                            },
+                        )
+                    )
+                    await self.voice.mark_command_ready()
+                    barge_sequence = await self._speak_with_barge_in(
+                        "I couldn't understand that clearly."
+                    )
+                    if barge_sequence is not None and followup < self.barge_in.maximum_followups:
+                        await self.voice.begin_barge_in()
+                        self.voice.vad.reset()
+                        minimum_sequence = barge_sequence
+                        continue
+                    await self.voice.return_to_wake()
+                    return
+
+                self.partial_stabilizer.update(text, confidence=1.0, is_final=True)
+                await self.events.publish(
+                    EventEnvelope(
+                        "voice.transcription.completed",
+                        {
+                            "session_id": self.voice.session_id,
+                            "text": text,
+                            "language": transcription.detected_language,
+                            "language_probability": transcription.language_probability,
+                            "latency_ms": transcription.inference_latency_ms,
+                        },
+                    )
+                )
+                act = await self.classify_conversational_utterance(text)
+
+                if act == ConversationAct.CANCEL:
+                    await self.voice.mark_command_ready()
+                    await self.speaker.interrupt()
+                    self._pending_response_chunks = ()
+                    await self.voice.return_to_wake()
+                    return
+
+                if act == ConversationAct.BACKCHANNEL:
+                    if followup < self.barge_in.maximum_followups:
+                        minimum_sequence = await self._continue_listening(minimum_sequence)
+                        continue
+                    await self.voice.mark_command_ready()
+                    await self.voice.return_to_wake()
+                    return
+
+                if act == ConversationAct.INCOMPLETE:
+                    await self.voice.mark_command_ready()
+                    await self._speak_with_barge_in("Go on.")
+                    if followup < self.barge_in.maximum_followups:
+                        await self.voice.begin_barge_in()
+                        self.voice.vad.reset()
+                        minimum_sequence = self.voice._sequence
+                        continue
+                    await self.voice.return_to_wake()
+                    return
+
+                if act == ConversationAct.CONTINUE and self._pending_response_chunks:
+                    await self.voice.mark_command_ready()
+                    barge_sequence = await self._continue_response()
+                    if barge_sequence is not None and followup < self.barge_in.maximum_followups:
+                        await self.voice.begin_barge_in()
+                        self.voice.vad.reset()
+                        minimum_sequence = barge_sequence
+                        continue
+                    await self.voice.return_to_wake()
+                    return
+
+                transcript_ready = monotonic()
+                result = await asyncio.to_thread(self.runtime.command, text, "voice")
+                transcript_to_result_ms = (monotonic() - transcript_ready) * 1000
+                await self.voice.mark_command_ready()
+                result_ready = monotonic()
+                barge_sequence = await self._speak_with_barge_in(result.message)
+                result_to_speech_ms = (monotonic() - result_ready) * 1000
+                if barge_sequence is not None and followup < self.barge_in.maximum_followups:
+                    await self.voice.begin_barge_in()
+                    self.voice.vad.reset()
+                    minimum_sequence = barge_sequence
+                    continue
+
+                self.voice.frames.clear()
+                self.voice.vad.reset()
+                await self.voice.return_to_wake()
+                self.completed_turns += 1
+                metrics = RealtimeTurnMetrics(
+                    wake_to_speech_ms,
+                    speech_to_transcript_ms,
+                    transcript_to_result_ms,
+                    result_to_speech_ms,
+                    (monotonic() - turn_started) * 1000,
+                    conversational_turns,
+                )
+                await self.events.publish(
+                    EventEnvelope(
+                        "voice.turn.completed",
+                        {"session_id": self.voice.session_id, **asdict(metrics)},
+                        EventPriority.LOW,
+                    )
+                )
+                return
+        except asyncio.CancelledError:
+            raise
+        except (RuntimeError, ValueError, OSError):
+            self.failed_turns += 1
+            await self.voice.fail_and_return_to_wake("ADVANCED_REALTIME_TURN_FAILED")
