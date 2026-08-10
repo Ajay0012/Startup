@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Security.Principal;
 
 namespace Pangu.SessionAgent;
@@ -30,10 +29,14 @@ internal sealed class ManagedProcess : IDisposable
 {
     private readonly Func<ProcessStartInfo?> _factory;
     private readonly string _name;
+    private readonly TimeSpan _stabilityWindow = TimeSpan.FromSeconds(30);
     private Process? _process;
     private DateTimeOffset _nextRestart = DateTimeOffset.MinValue;
+    private DateTimeOffset? _startedAt;
+    private DateTimeOffset? _lastFailureAt;
     private int _failures;
     private bool _stopping;
+    private bool _circuitOpen;
 
     public ManagedProcess(string name, Func<ProcessStartInfo?> factory)
     {
@@ -43,11 +46,23 @@ internal sealed class ManagedProcess : IDisposable
 
     public bool Running => _process is { HasExited: false };
     public int? ProcessId => Running ? _process!.Id : null;
-    public string Status => Running ? $"running (PID {_process!.Id})" : "stopped";
+    public bool CircuitOpen => _circuitOpen;
+    public int FailureCount => _failures;
+    public DateTimeOffset? LastFailureAt => _lastFailureAt;
+    public TimeSpan Uptime => Running && _startedAt is not null
+        ? DateTimeOffset.UtcNow - _startedAt.Value
+        : TimeSpan.Zero;
+    public string Status => _circuitOpen
+        ? $"recovery paused after {_failures} rapid failures"
+        : Running
+            ? $"running (PID {_process!.Id})"
+            : DateTimeOffset.UtcNow < _nextRestart
+                ? "restart backoff"
+                : "stopped";
 
     public bool EnsureRunning()
     {
-        if (_stopping || Running || DateTimeOffset.UtcNow < _nextRestart)
+        if (_stopping || Running || _circuitOpen || DateTimeOffset.UtcNow < _nextRestart)
             return Running;
         var info = _factory();
         if (info is null)
@@ -58,9 +73,9 @@ internal sealed class ManagedProcess : IDisposable
             _process = Process.Start(info);
             if (_process is null)
                 throw new InvalidOperationException($"Failed to start {_name}.");
+            _startedAt = DateTimeOffset.UtcNow;
             _process.EnableRaisingEvents = true;
             _process.Exited += (_, _) => RecordFailure();
-            _failures = 0;
             return true;
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
@@ -74,9 +89,29 @@ internal sealed class ManagedProcess : IDisposable
     {
         if (_stopping)
             return;
-        _failures = Math.Min(_failures + 1, 6);
+        var now = DateTimeOffset.UtcNow;
+        var stable = _startedAt is not null && now - _startedAt.Value >= _stabilityWindow;
+        _failures = stable ? 1 : Math.Min(_failures + 1, 8);
+        _lastFailureAt = now;
+        _startedAt = null;
+        if (_failures >= 6)
+        {
+            _circuitOpen = true;
+            _nextRestart = DateTimeOffset.MaxValue;
+            return;
+        }
         var seconds = Math.Min(60, Math.Pow(2, _failures));
-        _nextRestart = DateTimeOffset.UtcNow.AddSeconds(seconds);
+        _nextRestart = now.AddSeconds(seconds);
+    }
+
+    public void MarkHealthy()
+    {
+        if (!Running || _startedAt is null || DateTimeOffset.UtcNow - _startedAt.Value < _stabilityWindow)
+            return;
+        _failures = 0;
+        _lastFailureAt = null;
+        _nextRestart = DateTimeOffset.MinValue;
+        _circuitOpen = false;
     }
 
     public void Restart()
@@ -84,6 +119,8 @@ internal sealed class ManagedProcess : IDisposable
         Stop(false);
         _stopping = false;
         _failures = 0;
+        _circuitOpen = false;
+        _lastFailureAt = null;
         _nextRestart = DateTimeOffset.MinValue;
         EnsureRunning();
     }
@@ -112,6 +149,7 @@ internal sealed class ManagedProcess : IDisposable
         {
             process.Dispose();
             _process = null;
+            _startedAt = null;
         }
     }
 
@@ -128,6 +166,8 @@ internal sealed class SessionAgentContext : ApplicationContext, IDisposable
     private readonly string _root;
     private bool _disposed;
     private bool _backendHealthy;
+    private bool _supervising;
+    private int _backendHealthFailures;
 
     public SessionAgentContext()
     {
@@ -157,7 +197,7 @@ internal sealed class SessionAgentContext : ApplicationContext, IDisposable
         {
             await SuperviseAsync();
             status.Text = StatusText();
-            _tray.Text = TrimTrayText($"PANGU · {( _backendHealthy ? "ready" : "starting" )}");
+            _tray.Text = TrimTrayText($"PANGU · {HealthLabel()}");
         };
         _timer.Start();
         _ = SuperviseAsync();
@@ -242,12 +282,47 @@ internal sealed class SessionAgentContext : ApplicationContext, IDisposable
 
     private async Task SuperviseAsync()
     {
-        if (_disposed)
+        if (_disposed || _supervising)
             return;
-        _backendHealthy = await BackendHealthyAsync();
-        if (!_backendHealthy)
-            _backend.EnsureRunning();
-        _overlay.EnsureRunning();
+        _supervising = true;
+        try
+        {
+            _backendHealthy = await BackendHealthyAsync();
+            if (_backendHealthy)
+            {
+                _backendHealthFailures = 0;
+                _backend.MarkHealthy();
+            }
+            else
+            {
+                _backendHealthFailures = Math.Min(_backendHealthFailures + 1, 100);
+                if (_backend.Running && _backendHealthFailures >= 3 && !_backend.CircuitOpen)
+                {
+                    _backend.Restart();
+                    _backendHealthFailures = 0;
+                }
+                else
+                {
+                    _backend.EnsureRunning();
+                }
+            }
+
+            _overlay.EnsureRunning();
+            _overlay.MarkHealthy();
+        }
+        finally
+        {
+            _supervising = false;
+        }
+    }
+
+    private string HealthLabel()
+    {
+        if (_backend.CircuitOpen || _overlay.CircuitOpen)
+            return "recovery paused";
+        if (_backendHealthy && _overlay.Running)
+            return "ready";
+        return "recovering";
     }
 
     private string StatusText() =>
@@ -255,11 +330,16 @@ internal sealed class SessionAgentContext : ApplicationContext, IDisposable
 
     private void ShowStatus()
     {
+        var failures = _backend.LastFailureAt is null && _overlay.LastFailureAt is null
+            ? "No unresolved crash loop detected."
+            : $"Backend failures: {_backend.FailureCount}; overlay failures: {_overlay.FailureCount}.";
         _tray.ShowBalloonTip(
-            2500,
+            3500,
             "PANGU status",
-            $"{StatusText()}\nRoot: {_root}",
-            _backendHealthy ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            $"{StatusText()}\n{failures}\nRoot: {_root}",
+            _backendHealthy && !_backend.CircuitOpen && !_overlay.CircuitOpen
+                ? ToolTipIcon.Info
+                : ToolTipIcon.Warning);
     }
 
     private void OpenRoot()
@@ -271,6 +351,7 @@ internal sealed class SessionAgentContext : ApplicationContext, IDisposable
 
     private void RestartAll()
     {
+        _backendHealthFailures = 0;
         _backend.Restart();
         _overlay.Restart();
         _ = SuperviseAsync();
