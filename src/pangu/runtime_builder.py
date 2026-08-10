@@ -344,7 +344,7 @@ class RuntimeBuilder:
                     ("database", "events", "awareness"),
                 )
             )
-        if settings.pangu_browser_enabled:
+        if settings.pangu_browser_enabled or settings.pangu_media_enabled:
             container.lifecycle.register(
                 LifecycleService("browser", container.browser.start, container.browser.stop, ("events",))
             )
