@@ -7,7 +7,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .evaluation import EvaluationDecision, IntelligenceEvaluationGate, standard_benchmark
+from .evaluation import (
+    EvaluationDecision,
+    IntelligenceBenchmark,
+    IntelligenceEvaluationGate,
+    standard_benchmark,
+)
 from .self_upgrade import UpgradeResult
 
 
@@ -34,7 +39,7 @@ class BenchmarkArtifact:
             parsed[str(key)] = float(value)
         return cls(revision, label, parsed)
 
-    def benchmark(self):  # type: ignore[no-untyped-def]
+    def benchmark(self) -> IntelligenceBenchmark:
         required = {
             "wake_false_accept_rate",
             "wake_false_reject_rate",
