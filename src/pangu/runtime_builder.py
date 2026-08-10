@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .advanced_language import ContextAwareLanguageRuntime
+from .advanced_realtime_voice import AdvancedRealtimeVoiceTurnCoordinator
 from .advanced_services import AdvancedIntelligenceServices, build_advanced_intelligence
 from .applications import (
     ApplicationCatalog,
@@ -133,7 +134,19 @@ class RuntimeBuilder:
                 headless=settings.pangu_browser_headless,
             )
         )
-        advanced = build_advanced_intelligence(self._root, events, memory, world_model)
+        advanced = build_advanced_intelligence(
+            self._root,
+            events,
+            memory,
+            world_model,
+            screen,
+            screen_observation_enabled=settings.pangu_screen_observation_enabled,
+            screen_observation_interval_seconds=settings.pangu_screen_observation_interval_seconds,
+            screen_observation_ocr_enabled=settings.pangu_screen_observation_ocr_enabled,
+            screen_observation_suppress_password_contexts=(
+                settings.pangu_screen_observation_suppress_password_contexts
+            ),
+        )
         language = ContextAwareLanguageRuntime(advanced.contextual_language)
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
@@ -369,6 +382,15 @@ class RuntimeBuilder:
                 ("events",),
             )
         )
+        if settings.pangu_screen_observation_enabled:
+            container.lifecycle.register(
+                LifecycleService(
+                    "screen_observer",
+                    container.advanced.screen_observer.start,
+                    container.advanced.screen_observer.stop,
+                    ("events",),
+                )
+            )
         if settings.pangu_awareness_enabled:
             container.lifecycle.register(
                 LifecycleService(
@@ -388,7 +410,12 @@ class RuntimeBuilder:
                 )
             )
         if isinstance(container.voice, ProductionVoiceSessionRuntime):
-            container.realtime_voice = RealtimeVoiceTurnCoordinator(
+            coordinator_type = (
+                AdvancedRealtimeVoiceTurnCoordinator
+                if settings.pangu_full_duplex_voice_enabled
+                else RealtimeVoiceTurnCoordinator
+            )
+            container.realtime_voice = coordinator_type(
                 container.voice,
                 container.runtime,
                 container.events,
