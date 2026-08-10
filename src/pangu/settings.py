@@ -54,8 +54,13 @@ class PanguSettings(BaseSettings):
     pangu_allow_document_upload: bool = False
     pangu_redact_sensitive_data: bool = True
     pangu_wake_cooldown_seconds: float = 2.0
+    pangu_full_duplex_voice_enabled: bool = True
     pangu_awareness_enabled: bool = True
     pangu_awareness_interval_seconds: float = 5.0
+    pangu_screen_observation_enabled: bool = False
+    pangu_screen_observation_interval_seconds: float = 1.25
+    pangu_screen_observation_ocr_enabled: bool = True
+    pangu_screen_observation_suppress_password_contexts: bool = True
     pangu_media_enabled: bool = True
     pangu_browser_enabled: bool = False
     pangu_browser_headless: bool = False
@@ -102,6 +107,13 @@ class PanguSettings(BaseSettings):
     def awareness_interval_bounds(cls, value: float) -> float:
         if not 1 <= value <= 300:
             raise ValueError("awareness interval must be between 1 and 300 seconds")
+        return value
+
+    @field_validator("pangu_screen_observation_interval_seconds")
+    @classmethod
+    def screen_observation_interval_bounds(cls, value: float) -> float:
+        if not 0.25 <= value <= 30:
+            raise ValueError("screen observation interval must be between 0.25 and 30 seconds")
         return value
 
     @field_validator("pangu_gesture_camera_index")
