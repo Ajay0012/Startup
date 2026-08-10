@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .advanced_language import ContextAwareLanguageRuntime
 from .advanced_services import AdvancedIntelligenceServices, build_advanced_intelligence
 from .applications import (
     ApplicationCatalog,
@@ -133,6 +134,7 @@ class RuntimeBuilder:
             )
         )
         advanced = build_advanced_intelligence(self._root, events, memory, world_model)
+        language = ContextAwareLanguageRuntime(advanced.contextual_language)
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
         api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
@@ -273,7 +275,7 @@ class RuntimeBuilder:
             WakePhrasePolicyVerifier(),
             transcriber,
             events,
-            LanguageRuntime(),
+            language,
         )
         gesture = GestureRuntime(
             MediaPipeHandTracker(
@@ -299,7 +301,7 @@ class RuntimeBuilder:
             gemini,
             ModelRouter(deterministic, gemini, sanitizer),
             CognitiveEngine(),
-            LanguageRuntime(),
+            language,
             ContextAssembler(),
             capabilities,
             adapter,
@@ -356,6 +358,14 @@ class RuntimeBuilder:
                 "hud_bridge",
                 container.advanced.hud.start,
                 container.advanced.hud.stop,
+                ("events",),
+            )
+        )
+        container.lifecycle.register(
+            LifecycleService(
+                "resilience",
+                container.advanced.resilience.start,
+                container.advanced.resilience.stop,
                 ("events",),
             )
         )
