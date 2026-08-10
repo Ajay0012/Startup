@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from dataclasses import dataclass
+from hashlib import sha256
 from time import monotonic
 
 from .events import EventBus, EventEnvelope, EventPriority
@@ -129,7 +130,7 @@ class ScreenObservationRuntime:
         ocr_text: tuple[str, ...],
         sensitive: bool,
     ) -> str:
-        return "|".join(
+        payload = "|".join(
             (
                 str(snapshot.active_window_handle or 0),
                 snapshot.active_window_title or "",
@@ -138,6 +139,7 @@ class ScreenObservationRuntime:
                 "\x1f".join(ocr_text),
             )
         )
+        return sha256(payload.encode("utf-8", errors="replace")).hexdigest()
 
     async def observe_once(self) -> SemanticScreenObservation | None:
         if self._paused:
