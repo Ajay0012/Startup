@@ -56,6 +56,7 @@ class PanguSettings(BaseSettings):
     pangu_wake_cooldown_seconds: float = 2.0
     pangu_awareness_enabled: bool = True
     pangu_awareness_interval_seconds: float = 5.0
+    pangu_media_enabled: bool = True
     pangu_browser_enabled: bool = False
     pangu_browser_headless: bool = False
     pangu_computer_use_enabled: bool = False
