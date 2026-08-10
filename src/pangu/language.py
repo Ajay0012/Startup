@@ -29,6 +29,68 @@ class LanguageRuntime:
                 {"query": direct_media.group(1), "url": direct_media.group(1), "source": "direct"},
                 0.99,
             )
+
+        latest_channel = re.fullmatch(
+            r"play\s+(?:the\s+)?latest\s+(?:video|upload)(?:\s+on\s+youtube)?\s+(?:from|of|by)\s+(.+?)(?:\s+channel)?",
+            clean,
+            re.IGNORECASE,
+        )
+        if latest_channel:
+            channel = latest_channel.group(1).strip()
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": f"latest video from {channel}", "source": "youtube"},
+                0.995,
+            )
+
+        latest_channel_alt = re.fullmatch(
+            r"play\s+(?:the\s+)?latest\s+(?:video|upload)\s+(?:from|of|by)\s+(.+?)(?:\s+on\s+youtube)?",
+            clean,
+            re.IGNORECASE,
+        )
+        if latest_channel_alt:
+            channel = latest_channel_alt.group(1).strip()
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": f"latest video from {channel}", "source": "youtube"},
+                0.995,
+            )
+
+        specific_channel = re.fullmatch(
+            r"play\s+(.+?)\s+(?:video\s+)?(?:from|of|by)\s+(.+?)(?:\s+channel)?(?:\s+on\s+youtube)?",
+            clean,
+            re.IGNORECASE,
+        )
+        if specific_channel:
+            video = specific_channel.group(1).strip()
+            channel = specific_channel.group(2).strip()
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": f"{video} from {channel}", "source": "youtube"},
+                0.99,
+            )
+
+        tanglish_latest = re.fullmatch(
+            r"(.+?)(?:\s+channel)?(?:\s+oda|\s+la)?\s+latest\s+(?:video|upload)\s+play\s+pannu",
+            lower,
+        )
+        if tanglish_latest:
+            channel = tanglish_latest.group(1).strip()
+            return NormalizedIntent(
+                "play_media",
+                clean,
+                clean,
+                {"query": f"latest video from {channel}", "source": "youtube"},
+                0.99,
+                "ta-en",
+            )
+
         media = re.fullmatch(
             r"play\s+(.+?)\s+(?:on|from)\s+(youtube|yt|vimeo|dailymotion|daily motion|archive(?:\.org)?)",
             clean,
