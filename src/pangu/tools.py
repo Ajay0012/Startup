@@ -7,7 +7,7 @@ from .capabilities import CapabilityCatalog, ToolSpecification
 from .contracts import Risk, Status, ToolRequest, ToolResult
 from .filesystem import FilesystemAdapter
 from .permissions import PermissionStore
-from .security import SafetyGateway
+from .security import ApprovalStore, SafetyGateway
 
 
 class ToolRuntime:
@@ -17,7 +17,7 @@ class ToolRuntime:
         safety: SafetyGateway,
         catalog: CapabilityCatalog,
         permissions: PermissionStore,
-        approvals: PersistentApprovalService,
+        approvals: PersistentApprovalService | ApprovalStore,
     ) -> None:
         self.root = allowed_root.resolve()
         self.safety = safety
@@ -48,12 +48,14 @@ class ToolRuntime:
         specification = self.catalog.resolve(request.tool_id, request.operation)
         if specification.risk not in {Risk.HIGH, Risk.PRIVILEGED}:
             raise ValueError("explicit approval is only issued for high or privileged operations")
-        return self.approvals.issue_tool_request(
-            request,
-            specification,
-            self._approval_target(request),
-            seconds=seconds,
-        )
+        if isinstance(self.approvals, PersistentApprovalService):
+            return self.approvals.issue_tool_request(
+                request,
+                specification,
+                self._approval_target(request),
+                seconds=seconds,
+            )
+        return self.approvals.issue(request, seconds)
 
     def _approved(
         self,
@@ -65,13 +67,15 @@ class ToolRuntime:
             return True
         if not approval:
             return False
-        denial = self.approvals.consume_tool_request(
-            approval,
-            request,
-            specification,
-            self._approval_target(request),
-        )
-        return denial is None
+        if isinstance(self.approvals, PersistentApprovalService):
+            denial = self.approvals.consume_tool_request(
+                approval,
+                request,
+                specification,
+                self._approval_target(request),
+            )
+            return denial is None
+        return self.approvals.consume(request, approval)
 
     def execute(self, request: ToolRequest, approval: str | None = None) -> ToolResult:
         try:
