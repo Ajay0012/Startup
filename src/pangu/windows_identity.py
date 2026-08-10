@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import import_module
-from typing import Any
 
 from .speaker_identity import IdentityTrustEngine, SpeakerRole, TrustContext, TrustDecision
 
@@ -38,12 +37,13 @@ class WindowsHelloVerifier:
             availability_enum = getattr(module, "UserConsentVerifierAvailability")
             result_enum = getattr(module, "UserConsentVerificationResult")
         except (ImportError, ModuleNotFoundError, AttributeError):
-            return StrongAuthResult(StrongAuthState.UNAVAILABLE, normalized_error="WINDOWS_HELLO_BACKEND_UNAVAILABLE")
+            return StrongAuthResult(
+                StrongAuthState.UNAVAILABLE,
+                normalized_error="WINDOWS_HELLO_BACKEND_UNAVAILABLE",
+            )
         try:
             availability = await verifier.check_availability_async()
-            available_values = {
-                getattr(availability_enum, "AVAILABLE", object()),
-            }
+            available_values = {getattr(availability_enum, "AVAILABLE", object())}
             if availability not in available_values:
                 return StrongAuthResult(
                     StrongAuthState.UNAVAILABLE,
@@ -57,13 +57,19 @@ class WindowsHelloVerifier:
                 getattr(result_enum, "DEVICE_BUSY", object()),
             }
             if result in cancelled:
-                return StrongAuthResult(StrongAuthState.CANCELLED, normalized_error="WINDOWS_HELLO_CANCELLED")
+                return StrongAuthResult(
+                    StrongAuthState.CANCELLED,
+                    normalized_error="WINDOWS_HELLO_CANCELLED",
+                )
             return StrongAuthResult(
                 StrongAuthState.FAILED,
                 normalized_error=f"WINDOWS_HELLO_{str(result).upper()}",
             )
         except (RuntimeError, OSError, ValueError):
-            return StrongAuthResult(StrongAuthState.FAILED, normalized_error="WINDOWS_HELLO_VERIFICATION_FAILED")
+            return StrongAuthResult(
+                StrongAuthState.FAILED,
+                normalized_error="WINDOWS_HELLO_VERIFICATION_FAILED",
+            )
 
 
 @dataclass(frozen=True)
@@ -95,7 +101,10 @@ class ContextualIdentitySecurity:
         self._lock = asyncio.Lock()
 
     def _fresh(self) -> bool:
-        return self._verified_at is not None and time.monotonic() - self._verified_at <= self.strong_auth_ttl_seconds
+        return (
+            self._verified_at is not None
+            and time.monotonic() - self._verified_at <= self.strong_auth_ttl_seconds
+        )
 
     async def require_strong_auth(self, reason: str) -> StrongAuthResult:
         async with self._lock:
