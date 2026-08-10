@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .advanced_services import AdvancedIntelligenceServices, build_advanced_intelligence
 from .applications import (
     ApplicationCatalog,
     ApplicationControlRuntime,
@@ -90,6 +91,7 @@ class ServiceContainer:
     screen: ScreenPerceptionRuntime
     computer_use: ComputerUseRuntime
     browser: BrowserRuntime
+    advanced: AdvancedIntelligenceServices
     runtime: Runtime = field(init=False)
     realtime_voice: RealtimeVoiceTurnCoordinator | None = field(init=False, default=None)
 
@@ -118,7 +120,9 @@ class RuntimeBuilder:
         missions = PersistentMissionRuntime(database, events)
         awareness = ProactiveAwarenessRuntime(events, memory)
         system_awareness = SystemAwarenessRuntime(
-            world_model, events, interval_seconds=settings.pangu_awareness_interval_seconds
+            world_model,
+            events,
+            interval_seconds=settings.pangu_awareness_interval_seconds,
         )
         screen = ScreenPerceptionRuntime()
         computer_use = ComputerUseRuntime(screen)
@@ -128,6 +132,7 @@ class RuntimeBuilder:
                 headless=settings.pangu_browser_headless,
             )
         )
+        advanced = build_advanced_intelligence(self._root, events, memory, world_model)
         sanitizer = CloudContextSanitizer()
         deterministic = DeterministicProvider()
         api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
@@ -156,6 +161,7 @@ class RuntimeBuilder:
             capabilities.register(
                 ModelCapability("gemini", model, role, vision=role == ModelRole.VISION)
             )
+
         catalog = CapabilityCatalog()
         catalog.register(
             ToolSpecification(
@@ -183,6 +189,7 @@ class RuntimeBuilder:
                     frozenset(),
                 )
             )
+
         adapter = self._application_adapter or RealWindowsApplicationAdapter()
         app_catalog = ApplicationCatalog(database, adapter)
         app_resolver = ApplicationResolver(app_catalog)
@@ -193,9 +200,14 @@ class RuntimeBuilder:
             PermissionStore((PermissionGrant("application.control:*", "default"),)),
             PersistentApprovalService(database),
         )
+
         catalog.register(
             ToolSpecification(
-                "system", "1.0.0", frozenset({"battery_status"}), Risk.READ_ONLY, frozenset()
+                "system",
+                "1.0.0",
+                frozenset({"battery_status"}),
+                Risk.READ_ONLY,
+                frozenset(),
             )
         )
         catalog.register(
@@ -237,6 +249,7 @@ class RuntimeBuilder:
             SafetyGateway(),
             database,
         )
+
         manifest_path = (
             Path(__file__).resolve().parents[2]
             / "models"
@@ -271,6 +284,7 @@ class RuntimeBuilder:
             TemporalGestureRecognizer(),
             events,
         )
+
         container = ServiceContainer(
             self._root,
             settings,
@@ -303,7 +317,9 @@ class RuntimeBuilder:
             screen,
             computer_use,
             browser,
+            advanced,
         )
+
         from .runtime import Runtime
 
         container.runtime = Runtime(
@@ -335,6 +351,14 @@ class RuntimeBuilder:
                 ("database", "events"),
             )
         )
+        container.lifecycle.register(
+            LifecycleService(
+                "hud_bridge",
+                container.advanced.hud.start,
+                container.advanced.hud.stop,
+                ("events",),
+            )
+        )
         if settings.pangu_awareness_enabled:
             container.lifecycle.register(
                 LifecycleService(
@@ -346,7 +370,12 @@ class RuntimeBuilder:
             )
         if settings.pangu_browser_enabled or settings.pangu_media_enabled:
             container.lifecycle.register(
-                LifecycleService("browser", container.browser.start, container.browser.stop, ("events",))
+                LifecycleService(
+                    "browser",
+                    container.browser.start,
+                    container.browser.stop,
+                    ("events",),
+                )
             )
         if isinstance(container.voice, ProductionVoiceSessionRuntime):
             container.realtime_voice = RealtimeVoiceTurnCoordinator(
@@ -365,6 +394,11 @@ class RuntimeBuilder:
             )
         if settings.pangu_gestures_enabled:
             container.lifecycle.register(
-                LifecycleService("gesture", container.gesture.start, container.gesture.stop, ("events",))
+                LifecycleService(
+                    "gesture",
+                    container.gesture.start,
+                    container.gesture.stop,
+                    ("events",),
+                )
             )
         return container
