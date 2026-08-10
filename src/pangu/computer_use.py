@@ -56,6 +56,10 @@ class ComputerActionAdapter(Protocol):
     def scroll(self, element: UIElement, amount: int) -> bool: ...
 
 
+class VisualFallbackAdapter(Protocol):
+    def execute(self, request: ComputerActionRequest) -> ComputerActionResult: ...
+
+
 class WindowsUIAutomationActionAdapter:
     """Native UIA action adapter. Targets are resolved structurally before every action."""
 
@@ -100,7 +104,6 @@ class WindowsUIAutomationActionAdapter:
             if hasattr(wrapper, "invoke"):
                 wrapper.invoke()
             elif hasattr(wrapper, "click"):
-                # Wrapper-native accessibility click only; no raw coordinate injection here.
                 wrapper.click()
             else:
                 return False
@@ -138,11 +141,7 @@ class WindowsUIAutomationActionAdapter:
 
 
 class ComputerUseRuntime:
-    """Typed, accessibility-first computer use with fail-closed target resolution.
-
-    This runtime deliberately has no arbitrary shell, coordinate click, keystroke, or
-    screen-text-to-action primitive. Model output must first become a typed request.
-    """
+    """Typed accessibility-first computer use with a guarded visual fallback."""
 
     _sensitive_terms = frozenset(
         {
@@ -174,9 +173,11 @@ class ComputerUseRuntime:
         self,
         perception: ScreenPerceptionRuntime | None = None,
         adapter: ComputerActionAdapter | None = None,
+        visual_fallback: VisualFallbackAdapter | None = None,
     ) -> None:
         self.perception = perception or ScreenPerceptionRuntime(WindowsUIAutomationAdapter())
         self.adapter = adapter or WindowsUIAutomationActionAdapter()
+        self.visual_fallback = visual_fallback
 
     @classmethod
     def _sensitive(cls, element: UIElement) -> bool:
@@ -211,9 +212,13 @@ class ComputerUseRuntime:
     def execute(self, request: ComputerActionRequest) -> ComputerActionResult:
         target, error = self._resolve(request.target)
         if target is None:
+            if error == "TARGET_NOT_FOUND" and self.visual_fallback is not None:
+                return self.visual_fallback.execute(request)
             return ComputerActionResult(
                 request.action,
-                ComputerUseState.DENIED if error == "TARGET_AMBIGUOUS" else ComputerUseState.UNSUPPORTED,
+                ComputerUseState.DENIED
+                if error == "TARGET_AMBIGUOUS"
+                else ComputerUseState.UNSUPPORTED,
                 "Computer target could not be resolved safely.",
                 normalized_error=error,
             )
@@ -274,12 +279,13 @@ class ComputerUseRuntime:
                 normalized_error="UIA_ACTION_FAILED",
             )
 
-        # A fresh snapshot proves the UIA boundary still responds after execution. Actions
-        # with app-specific semantic postconditions are left UNVERIFIED until a dedicated
-        # verifier is registered; focus has an observable accessibility postcondition.
         after = self.perception.capture()
         healthy = after.verification_state == "VERIFIED"
-        state = ComputerUseState.VERIFIED if request.action == ComputerActionKind.FOCUS and healthy else ComputerUseState.UNVERIFIED
+        state = (
+            ComputerUseState.VERIFIED
+            if request.action == ComputerActionKind.FOCUS and healthy
+            else ComputerUseState.UNVERIFIED
+        )
         return ComputerActionResult(
             request.action,
             state,
