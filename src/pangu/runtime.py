@@ -27,6 +27,7 @@ from .database import DatabaseService
 from .events import EventBus, EventEnvelope
 from .language import LanguageRuntime
 from .lifecycle import LifecycleKernel, LifecycleService
+from .media import MediaIntelligenceRuntime, MediaPlaybackState, MediaRequest
 from .memory import MemoryKind, PersistentMemoryRuntime
 from .missions import PersistentMissionRuntime
 from .model_runtime import (
@@ -89,6 +90,7 @@ class Runtime:
         self.screen = screen
         self.computer_use = computer_use
         self.browser = browser
+        self.media = MediaIntelligenceRuntime(browser) if browser is not None else None
         grants = PermissionStore((PermissionGrant("filesystem.write:*", "default"),))
         self.approvals = ApprovalStore()
         self.tools = ToolRuntime(root, self.safety, self.catalog, grants, self.approvals)
@@ -181,6 +183,7 @@ class Runtime:
             "browser_fill",
             "browser_back",
             "browser_forward",
+            "play_media",
         }
         route = self.model_router.route(intent.canonical_english, deterministic)
         return self.cognitive_engine.decide(intent.intent_name, route, intent.original_text)
@@ -312,8 +315,12 @@ class Runtime:
             },
         )
 
-    def _computer_result(self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]) -> ToolResult:
-        if self.computer_use is None or not bool(getattr(self.settings, "pangu_computer_use_enabled", False)):
+    def _computer_result(
+        self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]
+    ) -> ToolResult:
+        if self.computer_use is None or not bool(
+            getattr(self.settings, "pangu_computer_use_enabled", False)
+        ):
             return ToolResult(
                 command.command_id,
                 Status.DENIED,
@@ -348,7 +355,9 @@ class Runtime:
             {"error": native.normalized_error},
         )
 
-    def _browser_result(self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]) -> ToolResult:
+    def _browser_result(
+        self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]
+    ) -> ToolResult:
         if self.browser is None or not bool(getattr(self.settings, "pangu_browser_enabled", False)):
             return ToolResult(
                 command.command_id,
@@ -391,7 +400,11 @@ class Runtime:
         if request.action == BrowserActionKind.READ and native.snapshot is not None:
             page = native.snapshot
             excerpt = " ".join(page.text.split())[:1200]
-            message = f"{page.title or 'Web page'}: {excerpt}" if excerpt else page.title or native.message
+            message = (
+                f"{page.title or 'Web page'}: {excerpt}"
+                if excerpt
+                else page.title or native.message
+            )
         return ToolResult(
             command.command_id,
             status,
@@ -400,6 +413,62 @@ class Runtime:
                 "url": native.snapshot.url if native.snapshot else None,
                 "untrusted_content": native.snapshot.untrusted_content if native.snapshot else True,
             },
+            {"error": native.normalized_error},
+        )
+
+    def _media_result(self, command: CommandEnvelope, entities: dict[str, str]) -> ToolResult:
+        if self.media is None or not bool(getattr(self.settings, "pangu_browser_enabled", False)):
+            return ToolResult(
+                command.command_id,
+                Status.DENIED,
+                "Media playback needs the isolated PANGU browser. Enable PANGU_BROWSER_ENABLED first.",
+            )
+        native = asyncio.run(
+            self.media.play(
+                MediaRequest(
+                    entities.get("query", ""),
+                    source=MediaIntelligenceRuntime.source(entities.get("source")),
+                    direct_url=entities.get("url"),
+                )
+            )
+        )
+        status = (
+            Status.VERIFIED
+            if native.state == MediaPlaybackState.VERIFIED_PLAYING
+            else Status.DENIED
+            if native.state == MediaPlaybackState.DENIED
+            else Status.FAILED
+            if native.state == MediaPlaybackState.FAILED
+            else Status.UNVERIFIED
+        )
+        details: dict[str, object] = {
+            "playback_state": native.state.value,
+            "candidate": (
+                {
+                    "source": native.candidate.source.value,
+                    "title": native.candidate.title,
+                    "url": native.candidate.url,
+                    "score": native.candidate.score,
+                }
+                if native.candidate
+                else None
+            ),
+            "alternatives": [
+                {
+                    "source": item.source.value,
+                    "title": item.title,
+                    "url": item.url,
+                    "score": item.score,
+                }
+                for item in native.alternatives
+            ],
+            **native.evidence,
+        }
+        return ToolResult(
+            command.command_id,
+            status,
+            native.message,
+            details,
             {"error": native.normalized_error},
         )
 
@@ -480,6 +549,8 @@ class Runtime:
             "browser_forward",
         }:
             result = self._browser_result(command, intent.intent_name, intent.entities)
+        elif intent.intent_name == "play_media":
+            result = self._media_result(command, intent.entities)
         elif intent.intent_name == "remember" and self.memory is not None:
             text_to_remember = intent.entities.get("memory", "").strip()
             memory = self.memory.remember(
