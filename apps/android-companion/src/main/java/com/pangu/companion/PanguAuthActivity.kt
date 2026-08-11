@@ -1,11 +1,11 @@
 package com.pangu.companion
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
+import androidx.fragment.app.FragmentActivity
 
-class PanguAuthActivity : ComponentActivity() {
+class PanguAuthActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PhoneSecurityLease.revoke()
