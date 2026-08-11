@@ -23,6 +23,7 @@ from .contracts import Risk
 from .database import DatabaseService
 from .events import EventBus
 from .gestures import GestureRuntime, MediaPipeHandTracker, TemporalGestureRecognizer
+from .hardened_runtime import HardenedRuntime
 from .language import LanguageRuntime
 from .lifecycle import LifecycleKernel, LifecycleService
 from .memory import PersistentMemoryRuntime
@@ -43,6 +44,8 @@ from .model_runtime import (
     RetryPolicy,
 )
 from .permissions import PermissionGrant, PermissionStore
+from .phone_link import PhoneLinkRuntime
+from .phone_service import PhoneIntelligenceService
 from .production_voice import ProductionVoiceSessionRuntime, WakePhrasePolicyVerifier
 from .realtime_voice import RealtimeVoiceTurnCoordinator
 from .screen_perception import ScreenPerceptionRuntime
@@ -68,6 +71,7 @@ class ServiceContainer:
     lifecycle: LifecycleKernel
     events: EventBus
     catalog: CapabilityCatalog
+    approvals: PersistentApprovalService
     sanitizer: CloudContextSanitizer
     circuit_breaker: CircuitBreaker
     model_budget: ModelBudget
@@ -93,6 +97,8 @@ class ServiceContainer:
     screen: ScreenPerceptionRuntime
     computer_use: ComputerUseRuntime
     browser: BrowserRuntime
+    phone_link: PhoneLinkRuntime
+    phone: PhoneIntelligenceService
     advanced: AdvancedIntelligenceServices
     runtime: Runtime = field(init=False)
     realtime_voice: RealtimeVoiceTurnCoordinator | None = field(init=False, default=None)
@@ -116,6 +122,7 @@ class RuntimeBuilder:
     def build(self) -> ServiceContainer:
         settings = PanguSettings.load_root(self._root)
         database = DatabaseService(self._root / "runtime-data" / "database" / "pangu.db")
+        approvals = PersistentApprovalService(database)
         events = EventBus()
         memory = PersistentMemoryRuntime(database)
         world_model = PersonalWorldModel(database)
@@ -134,6 +141,16 @@ class RuntimeBuilder:
                 headless=settings.pangu_browser_headless,
             )
         )
+        phone_secret = (
+            settings.pangu_phone_pairing_secret.get_secret_value()
+            if settings.pangu_phone_pairing_secret
+            else None
+        )
+        phone_link = PhoneLinkRuntime(
+            phone_secret if settings.pangu_phone_enabled else None,
+            command_ttl_seconds=settings.pangu_phone_command_ttl_seconds,
+        )
+        phone = PhoneIntelligenceService(phone_link, events)
         advanced = build_advanced_intelligence(
             self._root,
             events,
@@ -213,7 +230,7 @@ class RuntimeBuilder:
             app_resolver,
             adapter,
             PermissionStore((PermissionGrant("application.control:*", "default"),)),
-            PersistentApprovalService(database),
+            approvals,
         )
 
         catalog.register(
@@ -301,44 +318,44 @@ class RuntimeBuilder:
         )
 
         container = ServiceContainer(
-            self._root,
-            settings,
-            database,
-            LifecycleKernel(),
-            events,
-            catalog,
-            sanitizer,
-            gemini.circuit,
-            gemini.budget,
-            deterministic,
-            gemini,
-            ModelRouter(deterministic, gemini, sanitizer),
-            CognitiveEngine(),
-            language,
-            ContextAssembler(),
-            capabilities,
-            adapter,
-            app_catalog,
-            app_resolver,
-            app_control,
-            system_control,
-            voice,
-            gesture,
-            memory,
-            world_model,
-            missions,
-            awareness,
-            system_awareness,
-            screen,
-            computer_use,
-            browser,
-            advanced,
+            root=self._root,
+            settings=settings,
+            database=database,
+            lifecycle=LifecycleKernel(),
+            events=events,
+            catalog=catalog,
+            approvals=approvals,
+            sanitizer=sanitizer,
+            circuit_breaker=gemini.circuit,
+            model_budget=gemini.budget,
+            deterministic_provider=deterministic,
+            gemini_provider=gemini,
+            model_router=ModelRouter(deterministic, gemini, sanitizer),
+            cognitive_engine=CognitiveEngine(),
+            language=language,
+            context=ContextAssembler(),
+            model_capabilities=capabilities,
+            application_adapter=adapter,
+            application_catalog=app_catalog,
+            application_resolver=app_resolver,
+            application_control=app_control,
+            system_control=system_control,
+            voice=voice,
+            gesture=gesture,
+            memory=memory,
+            world_model=world_model,
+            missions=missions,
+            awareness=awareness,
+            system_awareness=system_awareness,
+            screen=screen,
+            computer_use=computer_use,
+            browser=browser,
+            phone_link=phone_link,
+            phone=phone,
+            advanced=advanced,
         )
 
-        from .runtime import Runtime
-
-        container.runtime = Runtime(
-            container.root,
+        container.runtime = HardenedRuntime(
             container.settings,
             container.database,
             container.lifecycle,
@@ -357,6 +374,8 @@ class RuntimeBuilder:
             container.screen,
             container.computer_use,
             container.browser,
+            root=container.root,
+            persistent_approvals=container.approvals,
         )
         container.lifecycle.register(
             LifecycleService(
