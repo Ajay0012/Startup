@@ -15,12 +15,19 @@ from pangu.phone_link import (
 SECRET = "s" * 64
 
 
-def signed_message(runtime: PhoneLinkRuntime, sequence: int, *, now: int = 1000) -> PhoneLinkMessage:
-    payload: dict[str, object] = {"capabilities": ["place_call"]}
-    signature = runtime._sign(  # noqa: SLF001 - regression test covers the protocol primitive.
-        "phone-1", sequence, "heartbeat", now, now + 30, payload
+def signed_message(
+    runtime: PhoneLinkRuntime,
+    sequence: int,
+    *,
+    now: int = 1000,
+    kind: str = "heartbeat",
+    payload: dict[str, object] | None = None,
+) -> PhoneLinkMessage:
+    body = payload or {"capabilities": ["place_call"]}
+    signature = runtime._sign(  # noqa: SLF001 - regression test covers protocol primitive.
+        "phone-1", sequence, kind, now, now + 30, body
     )
-    return PhoneLinkMessage("phone-1", sequence, "heartbeat", now, now + 30, payload, signature)
+    return PhoneLinkMessage("phone-1", sequence, kind, now, now + 30, body, signature)
 
 
 def test_phone_link_rejects_replay_and_expired_messages() -> None:
@@ -45,6 +52,40 @@ def test_phone_link_rejects_tampered_payload() -> None:
         message.signature,
     )
     assert not runtime.verify(tampered, now=1000)
+
+
+def test_pairing_challenge_is_one_time_and_hello_sequence_remains_replay_floor() -> None:
+    runtime = PhoneLinkRuntime(SECRET)
+    challenge = runtime.issue_pairing_challenge(now=1000)
+    hello = signed_message(
+        runtime,
+        10,
+        now=1000,
+        kind="hello",
+        payload={
+            "challenge": challenge.challenge,
+            "capabilities": ["authenticate", "place_call", "call_media"],
+        },
+    )
+    assert runtime.verify(hello, now=1000)
+    phone = runtime.accept_hello(hello, now=1000)
+    assert phone.device_id == "phone-1"
+    assert PhoneCapability.CALL_MEDIA in phone.capabilities
+
+    # The hello signature cannot be replayed and a lower sequence cannot be accepted later.
+    assert not runtime.verify(hello, now=1000)
+    assert not runtime.verify(signed_message(runtime, 9, now=1000), now=1000)
+
+    second = signed_message(
+        runtime,
+        11,
+        now=1000,
+        kind="hello",
+        payload={"challenge": challenge.challenge, "capabilities": ["place_call"]},
+    )
+    assert runtime.verify(second, now=1000)
+    with pytest.raises(PermissionError, match="PAIRING_CHALLENGE_INVALID"):
+        runtime.accept_hello(second, now=1000)
 
 
 def test_phone_link_requires_capability_and_fresh_auth_for_privileged_command() -> None:
