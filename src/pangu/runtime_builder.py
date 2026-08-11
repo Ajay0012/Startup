@@ -34,8 +34,6 @@ from .model_runtime import (
     CognitiveEngine,
     ContextAssembler,
     DeterministicProvider,
-    GeminiProvider,
-    GoogleGenAITransport,
     ModelBudget,
     ModelCapability,
     ModelCapabilityRegistry,
@@ -51,6 +49,7 @@ from .realtime_voice import RealtimeVoiceTurnCoordinator
 from .screen_perception import ScreenPerceptionRuntime
 from .security import SafetyGateway
 from .settings import PanguSettings, resolve_application_root
+from .streaming_model import StreamingGeminiProvider, StreamingGoogleGenAITransport
 from .system_awareness import SystemAwarenessRuntime
 from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
 from .tts import WindowsSapiSpeechProvider
@@ -76,7 +75,7 @@ class ServiceContainer:
     circuit_breaker: CircuitBreaker
     model_budget: ModelBudget
     deterministic_provider: DeterministicProvider
-    gemini_provider: GeminiProvider
+    gemini_provider: StreamingGeminiProvider
     model_router: ModelRouter
     cognitive_engine: CognitiveEngine
     language: LanguageRuntime
@@ -174,9 +173,9 @@ class RuntimeBuilder:
             ModelRole.CODING: settings.gemini_coding_model,
             ModelRole.VISION: settings.gemini_vision_model,
         }
-        gemini = GeminiProvider(
+        gemini = StreamingGeminiProvider(
             api_key,
-            transport=GoogleGenAITransport(api_key) if api_key else None,
+            transport=StreamingGoogleGenAITransport(api_key) if api_key else None,
             models=models,
             circuit_breaker=CircuitBreaker(),
             retry_policy=RetryPolicy(settings.gemini_max_retries),
