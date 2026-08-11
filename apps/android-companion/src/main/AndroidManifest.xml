@@ -11,6 +11,11 @@
         android:supportsRtl="true">
 
         <activity
+            android:name="com.pangu.companion.PanguAuthActivity"
+            android:exported="false"
+            android:excludeFromRecents="true" />
+
+        <activity
             android:name="com.pangu.companion.PanguDialerActivity"
             android:exported="true">
             <intent-filter>
@@ -31,6 +36,9 @@
             <meta-data
                 android:name="android.telecom.IN_CALL_SERVICE_UI"
                 android:value="true" />
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_CAR_MODE_UI"
+                android:value="false" />
             <intent-filter>
                 <action android:name="android.telecom.InCallService" />
             </intent-filter>
