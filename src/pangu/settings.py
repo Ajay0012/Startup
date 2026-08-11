@@ -33,6 +33,17 @@ def _valid_api_key(value: str | SecretStr | None) -> str | None:
     return candidate
 
 
+def _valid_pairing_secret(value: str | SecretStr | None) -> str | None:
+    raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+    if raw is None:
+        return None
+    candidate = raw.strip()
+    placeholders = {"changeme", "example", "placeholder", "your_pairing_secret", "none", "null"}
+    if len(candidate) < 32 or candidate.lower() in placeholders:
+        return None
+    return candidate
+
+
 class PanguSettings(BaseSettings):
     """Root-scoped settings; secrets are intentionally excluded from repr."""
 
@@ -68,11 +79,19 @@ class PanguSettings(BaseSettings):
     pangu_gestures_enabled: bool = False
     pangu_gesture_camera_index: int = 0
     pangu_gesture_model_path: str = "models/vision/hand_landmarker.task"
+    pangu_phone_enabled: bool = False
+    pangu_phone_pairing_secret: SecretStr | None = None
+    pangu_phone_command_ttl_seconds: int = 30
 
     @field_validator("gemini_api_key", mode="before")
     @classmethod
     def configured_key(cls, value: str | SecretStr | None) -> str | None:
         return _valid_api_key(value)
+
+    @field_validator("pangu_phone_pairing_secret", mode="before")
+    @classmethod
+    def configured_phone_secret(cls, value: str | SecretStr | None) -> str | None:
+        return _valid_pairing_secret(value)
 
     @field_validator("pangu_ai_provider")
     @classmethod
@@ -123,6 +142,13 @@ class PanguSettings(BaseSettings):
             raise ValueError("gesture camera index must be between 0 and 32")
         return value
 
+    @field_validator("pangu_phone_command_ttl_seconds")
+    @classmethod
+    def phone_command_ttl_bounds(cls, value: int) -> int:
+        if not 5 <= value <= 300:
+            raise ValueError("phone command TTL must be between 5 and 300 seconds")
+        return value
+
     @classmethod
     def load_root(cls, root: Path) -> PanguSettings:
         """Load root .env values, overridden by explicitly-set process variables."""
@@ -140,6 +166,8 @@ class PanguSettings(BaseSettings):
             process_value = os.environ.get(name.upper())
             if process_value is not None:
                 if name == "gemini_api_key" and _valid_api_key(process_value) is None:
+                    continue
+                if name == "pangu_phone_pairing_secret" and _valid_pairing_secret(process_value) is None:
                     continue
                 values[name] = process_value
         return cls(**values)
