@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .device_ecosystem import DeviceActionResult
 
@@ -62,10 +62,12 @@ class PairedDeviceSigner:
 
 
 class PairedPhoneAdapter:
-    """Secure REST bridge to an explicitly paired companion endpoint.
+    """Secure REST bridge to an explicitly paired phone companion.
 
-    Messages and calls are consequential: callers must pass `confirmed=True`; this adapter
-    never interprets natural language as confirmation. Notification/context reads are bounded.
+    This boundary never treats natural-language output as authorization. Consequential
+    actions require an explicit `confirmed=True` from the policy/approval layer. Device
+    unlocking is never bypassed: PANGU can only request the companion to present the
+    platform biometric/device-credential UI and receive a yes/no result.
     """
 
     def __init__(
@@ -92,9 +94,11 @@ class PairedPhoneAdapter:
         path: str,
         payload: dict[str, object] | None = None,
     ) -> object:
-        body = b"" if payload is None else json.dumps(
-            payload, ensure_ascii=False, separators=(",", ":")
-        ).encode("utf-8")
+        body = (
+            b""
+            if payload is None
+            else json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -113,6 +117,13 @@ class PairedPhoneAdapter:
             raise RuntimeError("PAIRED_DEVICE_RESPONSE_TOO_LARGE")
         return json.loads(raw.decode("utf-8")) if raw else None
 
+    def _result(self, operation: str, method: str, path: str, payload: dict[str, object] | None = None) -> DeviceActionResult:
+        try:
+            data = self._request(method, path, payload)
+        except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError):
+            return DeviceActionResult(False, "Phone bridge unavailable.", normalized_error="PHONE_UNAVAILABLE")
+        return DeviceActionResult(True, operation, data)
+
     def health(self) -> bool:
         try:
             self._request("GET", "/v1/health")
@@ -120,14 +131,28 @@ class PairedPhoneAdapter:
         except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError):
             return False
 
+    def capabilities(self) -> DeviceActionResult:
+        return self._result("Read paired phone capabilities.", "GET", "/v1/capabilities")
+
     def notifications(self, *, limit: int = 20) -> DeviceActionResult:
         if not 1 <= limit <= 100:
             return DeviceActionResult(False, "Invalid notification limit.", normalized_error="INVALID_LIMIT")
-        try:
-            data = self._request("GET", f"/v1/notifications?limit={limit}")
-        except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError):
-            return DeviceActionResult(False, "Phone bridge unavailable.", normalized_error="PHONE_UNAVAILABLE")
-        return DeviceActionResult(True, "Read paired phone notifications.", data)
+        return self._result(
+            "Read paired phone notifications.",
+            "GET",
+            f"/v1/notifications?limit={limit}",
+        )
+
+    def request_device_authentication(self, reason: str) -> DeviceActionResult:
+        clean = " ".join(reason.strip().split())
+        if not clean or len(clean) > 240:
+            return DeviceActionResult(False, "Invalid authentication reason.", normalized_error="INVALID_AUTH_REASON")
+        return self._result(
+            "Requested phone biometric/device-credential authentication.",
+            "POST",
+            "/v1/authenticate",
+            {"reason": clean},
+        )
 
     def send_message(
         self,
@@ -145,15 +170,12 @@ class PairedPhoneAdapter:
             )
         if not recipient.strip() or not text.strip() or len(text) > 10_000:
             return DeviceActionResult(False, "Invalid message request.", normalized_error="INVALID_MESSAGE")
-        try:
-            data = self._request(
-                "POST",
-                "/v1/messages",
-                {"recipient": recipient.strip(), "text": text},
-            )
-        except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError):
-            return DeviceActionResult(False, "Phone bridge unavailable.", normalized_error="PHONE_UNAVAILABLE")
-        return DeviceActionResult(True, "Message submitted to the paired phone.", data)
+        return self._result(
+            "Message submitted to the paired phone.",
+            "POST",
+            "/v1/messages",
+            {"recipient": recipient.strip(), "text": text},
+        )
 
     def start_call(self, recipient: str, *, confirmed: bool = False) -> DeviceActionResult:
         if not confirmed:
@@ -165,11 +187,88 @@ class PairedPhoneAdapter:
             )
         if not recipient.strip() or len(recipient) > 200:
             return DeviceActionResult(False, "Invalid call target.", normalized_error="INVALID_CALL_TARGET")
-        try:
-            data = self._request("POST", "/v1/calls", {"recipient": recipient.strip()})
-        except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError):
-            return DeviceActionResult(False, "Phone bridge unavailable.", normalized_error="PHONE_UNAVAILABLE")
-        return DeviceActionResult(True, "Call request submitted to the paired phone.", data)
+        return self._result(
+            "Call request submitted to the paired phone.",
+            "POST",
+            "/v1/calls",
+            {"recipient": recipient.strip()},
+        )
+
+    def answer_call(self, call_id: str, *, confirmed: bool = False) -> DeviceActionResult:
+        if not confirmed:
+            return DeviceActionResult(
+                False,
+                "Answering a call requires explicit confirmation or an owner-defined call rule.",
+                confirmation_required=True,
+                normalized_error="CONFIRMATION_REQUIRED",
+            )
+        if not call_id.strip() or len(call_id) > 200:
+            return DeviceActionResult(False, "Invalid call id.", normalized_error="INVALID_CALL_ID")
+        return self._result(
+            "Incoming call answer requested.",
+            "POST",
+            f"/v1/calls/{quote(call_id, safe='')}/answer",
+        )
+
+    def end_call(self, call_id: str, *, confirmed: bool = True) -> DeviceActionResult:
+        if not confirmed:
+            return DeviceActionResult(
+                False,
+                "Ending this call requires confirmation.",
+                confirmation_required=True,
+                normalized_error="CONFIRMATION_REQUIRED",
+            )
+        if not call_id.strip() or len(call_id) > 200:
+            return DeviceActionResult(False, "Invalid call id.", normalized_error="INVALID_CALL_ID")
+        return self._result(
+            "Call termination requested.",
+            "POST",
+            f"/v1/calls/{quote(call_id, safe='')}/hangup",
+        )
+
+    def call_state(self, call_id: str) -> DeviceActionResult:
+        if not call_id.strip() or len(call_id) > 200:
+            return DeviceActionResult(False, "Invalid call id.", normalized_error="INVALID_CALL_ID")
+        return self._result(
+            "Read call state.",
+            "GET",
+            f"/v1/calls/{quote(call_id, safe='')}",
+        )
+
+    def speak_on_call(
+        self,
+        call_id: str,
+        text: str,
+        *,
+        assistant_disclosed: bool,
+        confirmed: bool = False,
+    ) -> DeviceActionResult:
+        """Request assistant speech only when the companion advertises a supported media path.
+
+        Android carrier-call media injection is not assumed. The companion must explicitly
+        expose this endpoint/capability (for example, an app-owned VoIP/WebRTC call path).
+        """
+        if not assistant_disclosed:
+            return DeviceActionResult(
+                False,
+                "PANGU must disclose that an automated assistant is speaking.",
+                normalized_error="ASSISTANT_DISCLOSURE_REQUIRED",
+            )
+        if not confirmed:
+            return DeviceActionResult(
+                False,
+                "Autonomous call speech requires an approved delegation session.",
+                confirmation_required=True,
+                normalized_error="CONFIRMATION_REQUIRED",
+            )
+        if not call_id.strip() or not text.strip() or len(text) > 4000:
+            return DeviceActionResult(False, "Invalid call speech request.", normalized_error="INVALID_CALL_SPEECH")
+        return self._result(
+            "Assistant speech submitted to the paired call media path.",
+            "POST",
+            f"/v1/calls/{quote(call_id, safe='')}/speak",
+            {"text": text, "assistant_disclosed": True},
+        )
 
     def push_context(
         self,
@@ -178,8 +277,9 @@ class PairedPhoneAdapter:
         allowed_keys: frozenset[str],
     ) -> DeviceActionResult:
         filtered = {key: value for key, value in context.items() if key in allowed_keys}
-        try:
-            data = self._request("POST", "/v1/context", {"context": filtered})
-        except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError):
-            return DeviceActionResult(False, "Phone bridge unavailable.", normalized_error="PHONE_UNAVAILABLE")
-        return DeviceActionResult(True, "Filtered context synchronized.", data)
+        return self._result(
+            "Filtered context synchronized.",
+            "POST",
+            "/v1/context",
+            {"context": filtered},
+        )
