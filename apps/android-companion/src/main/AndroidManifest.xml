@@ -11,13 +11,6 @@
         android:supportsRtl="true">
 
         <activity
-            android:name="com.pangu.companion.PanguBiometricActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true" />
-
-        <activity
             android:name="com.pangu.companion.PanguDialerActivity"
             android:exported="true">
             <intent-filter>
