@@ -65,5 +65,4 @@ async def test_sensitive_confirmation_event_is_redacted_and_resumable() -> None:
         await bus.start()
         assert await orchestrator.resolve(request_id, approve=False)
     finally:
-        if bus.running:
-            await bus.stop()
+        await bus.stop()
