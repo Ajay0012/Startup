@@ -4,7 +4,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
-import androidx.core.content.ContextCompat
 
 class PanguAuthActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -21,10 +20,9 @@ class PanguAuthActivity : ComponentActivity() {
             return
         }
 
-        val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(
             this,
-            executor,
+            mainExecutor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
