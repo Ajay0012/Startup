@@ -1,5 +1,6 @@
 package com.pangu.companion
 
+import android.os.Build
 import android.telecom.Call
 import android.telecom.VideoProfile
 import java.util.concurrent.ConcurrentHashMap
@@ -30,7 +31,17 @@ object CallRegistry {
         return true
     }
 
-    fun state(callId: String): Int? = calls[callId]?.state
+    fun state(callId: String): Int? {
+        val call = calls[callId] ?: return null
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            call.details.state
+        } else {
+            legacyState(call)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun legacyState(call: Call): Int = call.state
 
     fun ids(): List<String> = calls.keys().toList()
 }
