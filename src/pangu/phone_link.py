@@ -65,12 +65,19 @@ class CommandLease:
     requires_device_auth: bool
 
 
+@dataclass(frozen=True)
+class PairingChallenge:
+    challenge: str
+    expires_at: int
+
+
 class PhoneLinkRuntime:
     """Single replay-safe companion link owner for PANGU.
 
-    Network transport is supplied by the existing FastAPI backend. This runtime owns
-    authentication, sequence validation, device capabilities and bounded outbound command
-    leases. Pairing secrets are configuration inputs and never published to events/logs.
+    Transport is supplied by the existing local FastAPI backend. The phone initiates all
+    network traffic. Pairing uses a server-issued one-time challenge plus a signed hello;
+    reconnects must continue a monotonically increasing device sequence during the PANGU
+    process lifetime. Secrets are never returned by this object.
     """
 
     def __init__(self, secret: str | None, *, command_ttl_seconds: int = 30) -> None:
@@ -84,6 +91,7 @@ class PhoneLinkRuntime:
         self._inbound_sequence = -1
         self._outbound_sequence = 0
         self._queue: deque[CommandLease] = deque(maxlen=128)
+        self._challenges: dict[str, int] = {}
 
     @property
     def configured(self) -> bool:
@@ -124,6 +132,21 @@ class PhoneLinkRuntime:
             self._canonical(device_id, sequence, kind, issued_at, expires_at, payload),
             hashlib.sha256,
         ).hexdigest()
+
+    def issue_pairing_challenge(self, *, now: int | None = None) -> PairingChallenge:
+        if not self.configured:
+            raise RuntimeError("PHONE_LINK_NOT_CONFIGURED")
+        current = int(time.time()) if now is None else now
+        self._prune_challenges(current)
+        challenge = secrets.token_urlsafe(32)
+        expires_at = current + 60
+        self._challenges[challenge] = expires_at
+        return PairingChallenge(challenge, expires_at)
+
+    def _prune_challenges(self, now: int) -> None:
+        expired = [key for key, expiry in self._challenges.items() if expiry < now]
+        for key in expired:
+            self._challenges.pop(key, None)
 
     def verify(self, message: PhoneLinkMessage, *, now: int | None = None) -> bool:
         if self._secret is None or not message.device_id.strip():
@@ -166,7 +189,42 @@ class PhoneLinkRuntime:
             return None
         return message if self.verify(message, now=now) else None
 
+    @staticmethod
+    def _capabilities(raw: object) -> frozenset[PhoneCapability]:
+        if not isinstance(raw, list):
+            raise ValueError("phone capabilities must be a list")
+        result: set[PhoneCapability] = set()
+        for value in raw[:64]:
+            try:
+                result.add(PhoneCapability(str(value)))
+            except ValueError:
+                continue
+        return frozenset(result)
+
+    def accept_hello(self, message: PhoneLinkMessage, *, now: int | None = None) -> ConnectedPhone:
+        """Consume an already signature-verified hello containing a one-time challenge."""
+        current = int(time.time()) if now is None else now
+        self._prune_challenges(current)
+        if message.kind != "hello":
+            raise ValueError("phone handshake requires hello message")
+        challenge = str(message.payload.get("challenge", ""))
+        expires_at = self._challenges.pop(challenge, None)
+        if expires_at is None or expires_at < current:
+            raise PermissionError("PAIRING_CHALLENGE_INVALID")
+        capabilities = self._capabilities(message.payload.get("capabilities"))
+        clean = message.device_id.strip()
+        if not clean or len(clean) > 200:
+            raise ValueError("invalid phone device id")
+        now_mono = time.monotonic()
+        self._phone = ConnectedPhone(clean, capabilities, now_mono, now_mono)
+        self._outbound_sequence = 0
+        self._queue.clear()
+        # Deliberately do not reset _inbound_sequence: the verified hello sequence remains
+        # the replay floor for subsequent poll/event messages.
+        return self._phone
+
     def connect(self, device_id: str, capabilities: frozenset[PhoneCapability]) -> ConnectedPhone:
+        """Trusted in-process/test connection; network callers must use challenge + accept_hello."""
         if not self.configured:
             raise RuntimeError("PHONE_LINK_NOT_CONFIGURED")
         clean = device_id.strip()
@@ -174,8 +232,6 @@ class PhoneLinkRuntime:
             raise ValueError("invalid phone device id")
         now = time.monotonic()
         self._phone = ConnectedPhone(clean, capabilities, now, now)
-        self._inbound_sequence = -1
-        self._outbound_sequence = 0
         self._queue.clear()
         return self._phone
 
@@ -197,6 +253,8 @@ class PhoneLinkRuntime:
     def mark_authenticated(self, *, seconds: float = 120.0) -> None:
         if self._phone is None:
             raise RuntimeError("PHONE_NOT_CONNECTED")
+        if PhoneCapability.AUTHENTICATE not in self._phone.capabilities:
+            raise PermissionError("PHONE_AUTH_CAPABILITY_UNAVAILABLE")
         if not 15 <= seconds <= 600:
             raise ValueError("authentication lease must be between 15 and 600 seconds")
         self._phone = ConnectedPhone(
