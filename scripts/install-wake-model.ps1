@@ -41,7 +41,25 @@ try {
     Copy-Item (Join-Path $source.FullName 'tokens.txt') (Join-Path $target 'tokens.txt') -Force
     Copy-Item (Join-Path $source.FullName 'en.phone') (Join-Path $target 'en.phone') -Force
 
-    Add-Content -LiteralPath (Join-Path $target 'en.phone') -Value "`nPANGU P AE1 NG G UW0`nPANGUU P AE1 NG G UW0`nPANGOO P AE1 NG G UW0"
+    # sherpa-onnx rejects blank lexicon lines (it requires every line to contain
+    # a word plus at least one phone). Normalize the upstream lexicon and append
+    # PANGU pronunciations without introducing a leading empty line.
+    $lexiconPath = Join-Path $target 'en.phone'
+    $lexiconLines = @(
+        Get-Content -LiteralPath $lexiconPath |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $lexiconLines += @(
+        'PANGU P AE1 NG G UW0',
+        'PANGUU P AE1 NG G UW0',
+        'PANGOO P AE1 NG G UW0'
+    )
+    [System.IO.File]::WriteAllLines(
+        $lexiconPath,
+        $lexiconLines,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+
     $keywordsRaw = @'
 HEY PANGU :2.0 #0.28 @HEY_PANGU
 PANGU :1.6 #0.32 @PANGU
