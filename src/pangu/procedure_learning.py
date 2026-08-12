@@ -88,16 +88,17 @@ class ProcedureLearningRuntime:
             for key in step.arguments
         ):
             raise ValueError("sensitive arguments cannot be learned into procedures")
-        if step.action == DemonstrationAction.CLICK_CONTROL:
-            if "x" in step.arguments or "y" in step.arguments:
-                raise ValueError("raw coordinates cannot be stored in learned procedures")
+        if step.action == DemonstrationAction.CLICK_CONTROL and (
+            "x" in step.arguments or "y" in step.arguments
+        ):
+            raise ValueError("raw coordinates cannot be stored in learned procedures")
         self._steps.append(step)
 
     @staticmethod
     def _discover_parameters(steps: tuple[DemonstrationStep, ...]) -> tuple[str, ...]:
         parameters: set[str] = set()
         for step in steps:
-            for key, value in step.arguments.items():
+            for value in step.arguments.values():
                 if isinstance(value, str) and value.startswith("{{") and value.endswith("}}"):
                     name = value[2:-2].strip()
                     if name:
@@ -154,20 +155,23 @@ class ProcedureLearningRuntime:
             raise KeyError(name)
         raw_steps = record.content.get("steps")
         if not isinstance(raw_steps, list):
-            raise ValueError("stored procedure is invalid")
+            raise TypeError("stored procedure is invalid")
         steps: list[DemonstrationStep] = []
         for raw in raw_steps:
             if not isinstance(raw, dict):
-                raise ValueError("stored procedure step is invalid")
+                raise TypeError("stored procedure step is invalid")
             action = DemonstrationAction(str(raw.get("action", "")))
             target = str(raw.get("target", ""))
             arguments = raw.get("arguments", {})
             observed = raw.get("observed_state", {})
             if not isinstance(arguments, dict) or not isinstance(observed, dict):
-                raise ValueError("stored procedure arguments are invalid")
+                raise TypeError("stored procedure arguments are invalid")
             steps.append(DemonstrationStep(action, target, dict(arguments), dict(observed)))
         fingerprint = str(record.content.get("fingerprint", ""))
-        parameters = tuple(str(item) for item in record.content.get("parameters", []))
+        raw_parameters = record.content.get("parameters", [])
+        if not isinstance(raw_parameters, list):
+            raise TypeError("stored procedure parameters are invalid")
+        parameters = tuple(str(item) for item in raw_parameters)
         self.memory.remember(
             MemoryKind.PROCEDURAL,
             record.subject,
@@ -183,15 +187,25 @@ class ProcedureLearningRuntime:
         record = next((item for item in records if item.subject == f"procedure:{name}"), None)
         if record is None or record.content.get("verified") is not True:
             raise RuntimeError("procedure is missing or not owner-verified")
-        required = {str(item) for item in record.content.get("parameters", [])}
+        raw_parameters = record.content.get("parameters", [])
+        if not isinstance(raw_parameters, list):
+            raise TypeError("stored procedure parameters are invalid")
+        required = {str(item) for item in raw_parameters}
         if not required <= parameters.keys():
             missing = ", ".join(sorted(required - parameters.keys()))
             raise ValueError(f"missing procedure parameters: {missing}")
+        raw_steps = record.content.get("steps", [])
+        if not isinstance(raw_steps, list):
+            raise TypeError("stored procedure steps are invalid")
         result: list[DemonstrationStep] = []
-        for raw in record.content.get("steps", []):
+        for raw in raw_steps:
             if not isinstance(raw, dict):
                 continue
-            args: dict[str, Any] = dict(raw.get("arguments", {}))
+            raw_arguments = raw.get("arguments", {})
+            raw_observed = raw.get("observed_state", {})
+            if not isinstance(raw_arguments, dict) or not isinstance(raw_observed, dict):
+                continue
+            args: dict[str, Any] = dict(raw_arguments)
             for key, value in tuple(args.items()):
                 if isinstance(value, str) and value.startswith("{{") and value.endswith("}}"):
                     args[key] = parameters[value[2:-2].strip()]
@@ -200,7 +214,7 @@ class ProcedureLearningRuntime:
                     DemonstrationAction(str(raw["action"])),
                     str(raw["target"]),
                     args,
-                    dict(raw.get("observed_state", {})),
+                    dict(raw_observed),
                 )
             )
         return tuple(result)
