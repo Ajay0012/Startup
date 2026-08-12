@@ -8,6 +8,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -173,6 +174,14 @@ class DatabaseService:
         self.last_error: str | None = None
         self.repository_ready = False
 
+    def _alembic_config(self) -> Config:
+        config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+        config.set_main_option("sqlalchemy.url", f"sqlite:///{self.path.as_posix()}")
+        return config
+
+    def _migration_head(self) -> str | None:
+        return ScriptDirectory.from_config(self._alembic_config()).get_current_head()
+
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._engine = create_engine(
@@ -188,9 +197,7 @@ class DatabaseService:
             cursor.close()
 
         assert self._engine is not None
-        config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
-        config.set_main_option("sqlalchemy.url", f"sqlite:///{self.path.as_posix()}")
-        command.upgrade(config, "head")
+        command.upgrade(self._alembic_config(), "head")
         self._sessions = sessionmaker(self._engine, expire_on_commit=False)
         self._accepting = True
         self.repository_ready = True
@@ -219,7 +226,7 @@ class DatabaseService:
         return {"status": "ready", "journal_mode": str(mode), "foreign_keys": str(foreign_keys)}
 
     def health_details(self) -> dict[str, object]:
-        head = "0005_persistent_intelligence"
+        head = self._migration_head()
         if self._engine is None:
             return {
                 "component": "database",
@@ -242,7 +249,7 @@ class DatabaseService:
             mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
             foreign_keys = connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
             busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
-        at_head = revision == head
+        at_head = head is not None and revision == head
         ready = bool(
             at_head
             and str(mode).lower() == "wal"
