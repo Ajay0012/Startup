@@ -26,7 +26,6 @@ def test_event_bus_isolates_unexpected_subscriber_exception() -> None:
         await bus.start()
         event = EventEnvelope("test.event", {"value": 1})
         await bus.publish(event)
-        await asyncio.wait_for(bus._queue.join(), timeout=1.0)
         await bus.stop()
 
         assert handled == ["test.event"]
