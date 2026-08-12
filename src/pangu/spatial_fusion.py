@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .multimodal import ContextSignal, GroundedReferent, Modality, MultimodalContextFusion
-from .spatial_interaction import SpatialInteractionProposal
+from .spatial_interaction import SpatialActionProposal
 
 
 @dataclass(frozen=True)
 class SpatiallyGroundedAction:
-    proposal: SpatialInteractionProposal
+    proposal: SpatialActionProposal
     referent: GroundedReferent | None
     requires_disambiguation: bool
     execute_directly: bool = False
@@ -41,11 +41,11 @@ class GestureHudFusionRuntime:
 
     def ground(
         self,
-        proposal: SpatialInteractionProposal,
+        proposal: SpatialActionProposal,
         utterance: str = "this",
     ) -> SpatiallyGroundedAction:
         referent = self.fusion.resolve_referent(utterance)
-        requires_target = proposal.operation.value in {
+        requires_target = proposal.action.value in {
             "POINTER_MOVE",
             "SELECT",
             "GRAB_BEGIN",
