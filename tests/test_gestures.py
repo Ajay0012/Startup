@@ -38,10 +38,7 @@ def test_recognizes_horizontal_swipe() -> None:
     second = HandObservation(
         first.hand_id,
         first.handedness,
-        tuple(
-            HandLandmark(point.x + 0.35, point.y, point.z)
-            for point in first.landmarks
-        ),
+        tuple(HandLandmark(point.x + 0.35, point.y, point.z) for point in first.landmarks),
         1.3,
         first.confidence,
     )

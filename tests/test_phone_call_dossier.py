@@ -100,7 +100,9 @@ async def test_orchestrator_owner_event_never_contains_complete_sensitive_transc
             CallSpeaker.PANGU,
             "Please proceed without disclosing any additional medical information.",
         )
-        await orchestrator.mark_booked(session_id, "Confirmed for tomorrow at 10:30 AM, reference HSP-4491")
+        await orchestrator.mark_booked(
+            session_id, "Confirmed for tomorrow at 10:30 AM, reference HSP-4491"
+        )
         await bus.stop()
 
         dossier = orchestrator.dossier(session_id)

@@ -70,11 +70,15 @@ class LlamaCppOfflineProvider:
             if not choices:
                 return OfflineReasoningResult("", False, "llama.cpp", "EMPTY_LOCAL_RESPONSE")
             text = str(choices[0].get("text", "")).strip()
-            return OfflineReasoningResult(text, bool(text), "llama.cpp", None if text else "EMPTY_LOCAL_RESPONSE")
+            return OfflineReasoningResult(
+                text, bool(text), "llama.cpp", None if text else "EMPTY_LOCAL_RESPONSE"
+            )
         except RuntimeError as error:
             return OfflineReasoningResult("", False, "llama.cpp", str(error))
         except (OSError, ValueError) as error:
-            return OfflineReasoningResult("", False, "llama.cpp", f"LOCAL_INFERENCE_FAILED:{type(error).__name__}")
+            return OfflineReasoningResult(
+                "", False, "llama.cpp", f"LOCAL_INFERENCE_FAILED:{type(error).__name__}"
+            )
 
 
 class DeterministicOfflineIntelligence:

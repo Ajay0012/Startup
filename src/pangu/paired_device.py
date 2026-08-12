@@ -117,11 +117,15 @@ class PairedPhoneAdapter:
             raise RuntimeError("PAIRED_DEVICE_RESPONSE_TOO_LARGE")
         return json.loads(raw.decode("utf-8")) if raw else None
 
-    def _result(self, operation: str, method: str, path: str, payload: dict[str, object] | None = None) -> DeviceActionResult:
+    def _result(
+        self, operation: str, method: str, path: str, payload: dict[str, object] | None = None
+    ) -> DeviceActionResult:
         try:
             data = self._request(method, path, payload)
         except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError):
-            return DeviceActionResult(False, "Phone bridge unavailable.", normalized_error="PHONE_UNAVAILABLE")
+            return DeviceActionResult(
+                False, "Phone bridge unavailable.", normalized_error="PHONE_UNAVAILABLE"
+            )
         return DeviceActionResult(True, operation, data)
 
     def health(self) -> bool:
@@ -136,7 +140,9 @@ class PairedPhoneAdapter:
 
     def notifications(self, *, limit: int = 20) -> DeviceActionResult:
         if not 1 <= limit <= 100:
-            return DeviceActionResult(False, "Invalid notification limit.", normalized_error="INVALID_LIMIT")
+            return DeviceActionResult(
+                False, "Invalid notification limit.", normalized_error="INVALID_LIMIT"
+            )
         return self._result(
             "Read paired phone notifications.",
             "GET",
@@ -146,7 +152,9 @@ class PairedPhoneAdapter:
     def request_device_authentication(self, reason: str) -> DeviceActionResult:
         clean = " ".join(reason.strip().split())
         if not clean or len(clean) > 240:
-            return DeviceActionResult(False, "Invalid authentication reason.", normalized_error="INVALID_AUTH_REASON")
+            return DeviceActionResult(
+                False, "Invalid authentication reason.", normalized_error="INVALID_AUTH_REASON"
+            )
         return self._result(
             "Requested phone biometric/device-credential authentication.",
             "POST",
@@ -169,7 +177,9 @@ class PairedPhoneAdapter:
                 normalized_error="CONFIRMATION_REQUIRED",
             )
         if not recipient.strip() or not text.strip() or len(text) > 10_000:
-            return DeviceActionResult(False, "Invalid message request.", normalized_error="INVALID_MESSAGE")
+            return DeviceActionResult(
+                False, "Invalid message request.", normalized_error="INVALID_MESSAGE"
+            )
         return self._result(
             "Message submitted to the paired phone.",
             "POST",
@@ -186,7 +196,9 @@ class PairedPhoneAdapter:
                 normalized_error="CONFIRMATION_REQUIRED",
             )
         if not recipient.strip() or len(recipient) > 200:
-            return DeviceActionResult(False, "Invalid call target.", normalized_error="INVALID_CALL_TARGET")
+            return DeviceActionResult(
+                False, "Invalid call target.", normalized_error="INVALID_CALL_TARGET"
+            )
         return self._result(
             "Call request submitted to the paired phone.",
             "POST",
@@ -262,7 +274,9 @@ class PairedPhoneAdapter:
                 normalized_error="CONFIRMATION_REQUIRED",
             )
         if not call_id.strip() or not text.strip() or len(text) > 4000:
-            return DeviceActionResult(False, "Invalid call speech request.", normalized_error="INVALID_CALL_SPEECH")
+            return DeviceActionResult(
+                False, "Invalid call speech request.", normalized_error="INVALID_CALL_SPEECH"
+            )
         return self._result(
             "Assistant speech submitted to the paired call media path.",
             "POST",

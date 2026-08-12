@@ -20,8 +20,17 @@ from pangu.proactive_intelligence import (
     ProactiveCandidate,
 )
 from pangu.research_intelligence import ResearchEvidence, ResearchIntelligenceRuntime
-from pangu.screen_vision import OcrTextRegion, ScreenVisionRuntime, TemporalVisualTracker, VisualRegion
-from pangu.windows_extended import ExtendedWindowsRuntime, WindowsExtendedResult, WindowsExtendedState
+from pangu.screen_vision import (
+    OcrTextRegion,
+    ScreenVisionRuntime,
+    TemporalVisualTracker,
+    VisualRegion,
+)
+from pangu.windows_extended import (
+    ExtendedWindowsRuntime,
+    WindowsExtendedResult,
+    WindowsExtendedState,
+)
 from pangu.world_graph import PersonalWorldGraph
 from pangu.world_model import PersonalWorldModel
 
@@ -186,7 +195,9 @@ def test_contextual_interruption_policy_defers_low_urgency_during_presentation()
 
 
 class FakePowerShellRunner:
-    def run(self, script: str, args: tuple[str, ...] = (), timeout: int = 15) -> WindowsExtendedResult:
+    def run(
+        self, script: str, args: tuple[str, ...] = (), timeout: int = 15
+    ) -> WindowsExtendedResult:
         if "Get-Printer" in script:
             return WindowsExtendedResult(
                 "powershell",

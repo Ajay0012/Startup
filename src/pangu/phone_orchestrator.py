@@ -187,7 +187,9 @@ class PhoneDelegationOrchestrator:
             else f"Owner declined {request.field.value} change."
         )
         self._dossiers[request.session_id].record_owner_confirmation(summary)
-        self.record_turn(request.session_id, CallSpeaker.OWNER, summary, sensitive=request.sensitive)
+        self.record_turn(
+            request.session_id, CallSpeaker.OWNER, summary, sensitive=request.sensitive
+        )
         self.record_turn(
             request.session_id,
             CallSpeaker.PANGU,

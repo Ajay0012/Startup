@@ -86,7 +86,12 @@ class WindowsUIAutomationAdapter:
             windows = list(desktop.windows())
         except (ImportError, ModuleNotFoundError):
             return ScreenSnapshot(
-                "windows-uia", "UNAVAILABLE", None, None, (), normalized_error="UIA_BACKEND_UNAVAILABLE"
+                "windows-uia",
+                "UNAVAILABLE",
+                None,
+                None,
+                (),
+                normalized_error="UIA_BACKEND_UNAVAILABLE",
             )
         except Exception:  # noqa: BLE001 - native COM/UIA failures are normalized.
             return ScreenSnapshot(

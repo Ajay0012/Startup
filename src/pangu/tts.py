@@ -52,7 +52,9 @@ class WindowsSapiSpeechProvider:
     def _speak_sync(self, text: str) -> SpeechOutputResult:
         started = monotonic()
         if not text.strip():
-            return SpeechOutputResult(0, "windows-sapi", "UNVERIFIED", normalized_error="EMPTY_TEXT")
+            return SpeechOutputResult(
+                0, "windows-sapi", "UNVERIFIED", normalized_error="EMPTY_TEXT"
+            )
         try:
             voice = self._ensure_voice()
         except (ImportError, ModuleNotFoundError, OSError, RuntimeError):

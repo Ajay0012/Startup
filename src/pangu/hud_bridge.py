@@ -58,7 +58,9 @@ class HudStateBridge:
         "gesture.recognized",
     )
 
-    def __init__(self, events: EventBus, path: Path, *, minimum_write_interval: float = 0.08) -> None:
+    def __init__(
+        self, events: EventBus, path: Path, *, minimum_write_interval: float = 0.08
+    ) -> None:
         self.events = events
         self.path = path
         self.minimum_write_interval = minimum_write_interval
@@ -143,7 +145,11 @@ class HudStateBridge:
             attribute = self._safe_text(payload.get("attribute", "state"), 32)
             self.state.cards.insert(
                 0,
-                HudCard(entity.upper(), attribute, self._safe_text(payload.get("message", "changed"), 72)),
+                HudCard(
+                    entity.upper(),
+                    attribute,
+                    self._safe_text(payload.get("message", "changed"), 72),
+                ),
             )
             del self.state.cards[6:]
         elif topic == "gesture.recognized":
@@ -167,9 +173,9 @@ class HudStateBridge:
             if not force and now - self._last_write < self.minimum_write_interval:
                 return
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.state.updated_at = __import__("datetime").datetime.now(
-                __import__("datetime").UTC
-            ).isoformat()
+            self.state.updated_at = (
+                __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
+            )
             payload = {
                 "Mode": self.state.mode,
                 "Status": self.state.status,

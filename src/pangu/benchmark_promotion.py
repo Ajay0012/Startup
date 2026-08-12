@@ -131,7 +131,9 @@ class BenchmarkVerifiedPromoter:
         if not evaluation.accepted:
             return PromotionResult(False, evaluation, normalized_error="BENCHMARK_REGRESSION")
         if self.current_head() != expected_base_sha:
-            return PromotionResult(False, evaluation, normalized_error="BASE_CHANGED_DURING_EVALUATION")
+            return PromotionResult(
+                False, evaluation, normalized_error="BASE_CHANGED_DURING_EVALUATION"
+            )
         if shutil.which("git") is None:
             return PromotionResult(False, evaluation, normalized_error="GIT_UNAVAILABLE")
         token = upgrade.commit_sha[:12]

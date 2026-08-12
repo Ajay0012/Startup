@@ -232,7 +232,9 @@ class TemporalGestureRecognizer:
         return None
 
     def recognize(self, hands: tuple[HandObservation, ...]) -> tuple[GestureDetection, ...]:
-        eligible = tuple(hand for hand in hands if hand.confidence >= self.config.minimum_confidence)
+        eligible = tuple(
+            hand for hand in hands if hand.confidence >= self.config.minimum_confidence
+        )
         for hand in eligible:
             self._remember(hand)
         pair = self._two_hand(eligible)

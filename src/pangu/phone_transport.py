@@ -17,7 +17,9 @@ class PhoneLinkCallTransport:
 
     def start(self, target: str) -> DeviceActionResult:
         if not target.strip():
-            return DeviceActionResult(False, "Invalid call target.", normalized_error="INVALID_CALL_TARGET")
+            return DeviceActionResult(
+                False, "Invalid call target.", normalized_error="INVALID_CALL_TARGET"
+            )
         try:
             lease = self.link.queue_command(
                 PhoneCommand.PLACE_CALL,
@@ -26,7 +28,9 @@ class PhoneLinkCallTransport:
                 requires_device_auth=True,
             )
         except (RuntimeError, PermissionError) as error:
-            return DeviceActionResult(False, "Phone call could not be started.", normalized_error=str(error))
+            return DeviceActionResult(
+                False, "Phone call could not be started.", normalized_error=str(error)
+            )
         return DeviceActionResult(
             True,
             "Phone call queued on the paired companion.",
@@ -49,7 +53,9 @@ class PhoneLinkCallTransport:
                 "Assistant call media is unavailable on this phone transport.",
                 normalized_error=str(error),
             )
-        return DeviceActionResult(True, "Assistant speech queued.", {"command_id": lease.command_id})
+        return DeviceActionResult(
+            True, "Assistant speech queued.", {"command_id": lease.command_id}
+        )
 
     def pause(self) -> DeviceActionResult:
         try:
@@ -59,8 +65,12 @@ class PhoneLinkCallTransport:
                 capability=PhoneCapability.CALL_MEDIA,
             )
         except (RuntimeError, PermissionError) as error:
-            return DeviceActionResult(False, "Call media pause unavailable.", normalized_error=str(error))
-        return DeviceActionResult(True, "Assistant call media paused.", {"command_id": lease.command_id})
+            return DeviceActionResult(
+                False, "Call media pause unavailable.", normalized_error=str(error)
+            )
+        return DeviceActionResult(
+            True, "Assistant call media paused.", {"command_id": lease.command_id}
+        )
 
     def resume(self) -> DeviceActionResult:
         try:
@@ -70,8 +80,12 @@ class PhoneLinkCallTransport:
                 capability=PhoneCapability.CALL_MEDIA,
             )
         except (RuntimeError, PermissionError) as error:
-            return DeviceActionResult(False, "Call media resume unavailable.", normalized_error=str(error))
-        return DeviceActionResult(True, "Assistant call media resumed.", {"command_id": lease.command_id})
+            return DeviceActionResult(
+                False, "Call media resume unavailable.", normalized_error=str(error)
+            )
+        return DeviceActionResult(
+            True, "Assistant call media resumed.", {"command_id": lease.command_id}
+        )
 
     def end(self) -> DeviceActionResult:
         try:
@@ -82,5 +96,9 @@ class PhoneLinkCallTransport:
                 requires_device_auth=True,
             )
         except (RuntimeError, PermissionError) as error:
-            return DeviceActionResult(False, "Phone call could not be ended.", normalized_error=str(error))
-        return DeviceActionResult(True, "End-call command queued.", {"command_id": lease.command_id})
+            return DeviceActionResult(
+                False, "Phone call could not be ended.", normalized_error=str(error)
+            )
+        return DeviceActionResult(
+            True, "End-call command queued.", {"command_id": lease.command_id}
+        )

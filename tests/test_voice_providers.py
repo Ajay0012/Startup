@@ -1,7 +1,10 @@
 from pathlib import Path
 
 from pangu.voice import AudioFrame, VoiceOutcome
-from pangu.voice_providers import FasterWhisperTranscriptionProvider, TranscriptionWakePhraseVerifier
+from pangu.voice_providers import (
+    FasterWhisperTranscriptionProvider,
+    TranscriptionWakePhraseVerifier,
+)
 
 
 def test_missing_whisper_model_fails_closed(tmp_path: Path) -> None:

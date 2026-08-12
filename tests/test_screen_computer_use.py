@@ -127,7 +127,9 @@ def test_computer_use_blocks_consequential_controls_without_approval_path() -> N
 
 
 def test_computer_use_executes_non_sensitive_typed_action() -> None:
-    snapshot = ScreenSnapshot("fake", "VERIFIED", "Editor", 10, (element("Search", control_type="Edit"),))
+    snapshot = ScreenSnapshot(
+        "fake", "VERIFIED", "Editor", 10, (element("Search", control_type="Edit"),)
+    )
     actions = FakeActionAdapter()
     runtime = ComputerUseRuntime(ScreenPerceptionRuntime(FakeScreenAdapter(snapshot)), actions)
     result = runtime.execute(

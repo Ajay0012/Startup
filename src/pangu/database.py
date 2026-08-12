@@ -142,9 +142,7 @@ class MemoryRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     superseded_by: Mapped[str | None] = mapped_column(String(36))
-    __table_args__ = (
-        UniqueConstraint("namespace", "kind", "subject", name="uq_memory_subject"),
-    )
+    __table_args__ = (UniqueConstraint("namespace", "kind", "subject", name="uq_memory_subject"),)
 
 
 class WorldFactRow(Base):

@@ -213,7 +213,9 @@ class ResilientLoadManager(Generic[T]):
                 endpoint.in_flight += 1
                 started = time.monotonic()
                 try:
-                    result = await asyncio.wait_for(operation(endpoint.name), timeout=timeout_seconds)
+                    result = await asyncio.wait_for(
+                        operation(endpoint.name), timeout=timeout_seconds
+                    )
                 except asyncio.TimeoutError as error:
                     endpoint.timeouts += 1
                     endpoint.breaker.failure()
@@ -318,7 +320,9 @@ class SelfHealingSupervisor:
             )
             if service.health == ServiceHealth.UNHEALTHY and cooldown_ok:
                 try:
-                    await asyncio.wait_for(service.recover(), timeout=self.probe_timeout_seconds * 3)
+                    await asyncio.wait_for(
+                        service.recover(), timeout=self.probe_timeout_seconds * 3
+                    )
                 except (TimeoutError, OSError, RuntimeError):
                     pass
                 service.last_recovery_at = now

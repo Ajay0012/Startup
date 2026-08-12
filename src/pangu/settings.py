@@ -167,7 +167,10 @@ class PanguSettings(BaseSettings):
             if process_value is not None:
                 if name == "gemini_api_key" and _valid_api_key(process_value) is None:
                     continue
-                if name == "pangu_phone_pairing_secret" and _valid_pairing_secret(process_value) is None:
+                if (
+                    name == "pangu_phone_pairing_secret"
+                    and _valid_pairing_secret(process_value) is None
+                ):
                     continue
                 values[name] = process_value
         return cls(**values)

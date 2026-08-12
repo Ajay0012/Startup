@@ -154,7 +154,11 @@ class PersistentMemoryRuntime:
 
         ranked = sorted(live, key=score, reverse=True)
         if terms:
-            ranked = [item for item in ranked if any(term in f"{item.subject} {item.content}".casefold() for term in terms)]
+            ranked = [
+                item
+                for item in ranked
+                if any(term in f"{item.subject} {item.content}".casefold() for term in terms)
+            ]
         return tuple(ranked[:limit])
 
     def forget(self, memory_id: str) -> bool:
@@ -168,7 +172,9 @@ class PersistentMemoryRuntime:
     def prune_expired(self) -> int:
         now = datetime.now(UTC)
         with self.database.transaction() as session:
-            rows = list(session.scalars(select(MemoryRow).where(MemoryRow.expires_at.is_not(None))).all())
+            rows = list(
+                session.scalars(select(MemoryRow).where(MemoryRow.expires_at.is_not(None))).all()
+            )
             expired = [row for row in rows if (self._utc(row.expires_at) or now) <= now]
             for row in expired:
                 session.delete(row)

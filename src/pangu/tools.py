@@ -33,15 +33,14 @@ class ToolRuntime:
                 return str(self.filesystem.resolve(str(candidate)))
             except PermissionError:
                 return str(self.root / "runtime-data" / "approval-targets" / "rejected-path")
-        safe_tool = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in request.tool_id)
+        safe_tool = "".join(
+            ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in request.tool_id
+        )
         safe_operation = "".join(
             ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in request.operation
         )
         return str(
-            self.root
-            / "runtime-data"
-            / "approval-targets"
-            / f"{safe_tool}-{safe_operation}"
+            self.root / "runtime-data" / "approval-targets" / f"{safe_tool}-{safe_operation}"
         )
 
     def issue_approval(self, request: ToolRequest, seconds: int = 300) -> str:

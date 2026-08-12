@@ -6,7 +6,12 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from .computer_use import ComputerActionKind, ComputerActionRequest, ComputerActionResult, ComputerUseState
+from .computer_use import (
+    ComputerActionKind,
+    ComputerActionRequest,
+    ComputerActionResult,
+    ComputerUseState,
+)
 from .screen_vision import OcrTextRegion, ScreenVisionRuntime
 
 
@@ -137,7 +142,9 @@ class VisualComputerUseFallback:
                 "No unambiguous high-confidence visual target was found.",
                 normalized_error="VISUAL_TARGET_NOT_FOUND_OR_AMBIGUOUS",
             )
-        if self._sensitive_label(region.text) or not self._inside(region, before.width, before.height):
+        if self._sensitive_label(region.text) or not self._inside(
+            region, before.width, before.height
+        ):
             return ComputerActionResult(
                 request.action,
                 ComputerUseState.DENIED,

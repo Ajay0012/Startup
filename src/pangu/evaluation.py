@@ -76,7 +76,9 @@ class IntelligenceEvaluationGate:
 
     @staticmethod
     def _utility(metric: BenchmarkMetric) -> float:
-        return metric.value if metric.direction == MetricDirection.HIGHER_IS_BETTER else -metric.value
+        return (
+            metric.value if metric.direction == MetricDirection.HIGHER_IS_BETTER else -metric.value
+        )
 
     @staticmethod
     def _violates_hard_limit(metric: BenchmarkMetric) -> bool:
@@ -117,7 +119,9 @@ class IntelligenceEvaluationGate:
             if name in self.protected_metrics and relative < -self.allowed_relative_regression:
                 regressions.append(f"{name}: {relative:+.2%}")
         score_delta = mean(weighted_deltas) if weighted_deltas else 0.0
-        accepted = not regressions and not missing and score_delta >= -self.allowed_relative_regression
+        accepted = (
+            not regressions and not missing and score_delta >= -self.allowed_relative_regression
+        )
         return EvaluationDecision(
             accepted,
             score_delta,
@@ -145,16 +149,82 @@ def standard_benchmark(
     return IntelligenceBenchmark(
         label,
         (
-            BenchmarkMetric("wake_false_accept_rate", wake_far, MetricDirection.LOWER_IS_BETTER, 1.2, hard_maximum=0.08),
-            BenchmarkMetric("wake_false_reject_rate", wake_frr, MetricDirection.LOWER_IS_BETTER, 1.0, hard_maximum=0.20),
-            BenchmarkMetric("transcription_word_error_rate", wer, MetricDirection.LOWER_IS_BETTER, 1.2, hard_maximum=0.25),
-            BenchmarkMetric("command_completion_rate", command_completion, MetricDirection.HIGHER_IS_BETTER, 1.5, hard_minimum=0.85),
-            BenchmarkMetric("hallucination_rate", hallucination_rate, MetricDirection.LOWER_IS_BETTER, 1.5, hard_maximum=0.08),
-            BenchmarkMetric("computer_use_success_rate", computer_use_success, MetricDirection.HIGHER_IS_BETTER, 1.3, hard_minimum=0.75),
-            BenchmarkMetric("p95_turn_latency_ms", p95_turn_latency_ms, MetricDirection.LOWER_IS_BETTER, 1.1, hard_maximum=4500),
-            BenchmarkMetric("mission_success_rate", mission_success, MetricDirection.HIGHER_IS_BETTER, 1.3, hard_minimum=0.75),
-            BenchmarkMetric("mission_recovery_rate", recovery_rate, MetricDirection.HIGHER_IS_BETTER, 1.0, hard_minimum=0.60),
-            BenchmarkMetric("memory_retrieval_precision", memory_precision, MetricDirection.HIGHER_IS_BETTER, 1.0, hard_minimum=0.75),
-            BenchmarkMetric("crash_free_session_rate", crash_free_rate, MetricDirection.HIGHER_IS_BETTER, 1.8, hard_minimum=0.98),
+            BenchmarkMetric(
+                "wake_false_accept_rate",
+                wake_far,
+                MetricDirection.LOWER_IS_BETTER,
+                1.2,
+                hard_maximum=0.08,
+            ),
+            BenchmarkMetric(
+                "wake_false_reject_rate",
+                wake_frr,
+                MetricDirection.LOWER_IS_BETTER,
+                1.0,
+                hard_maximum=0.20,
+            ),
+            BenchmarkMetric(
+                "transcription_word_error_rate",
+                wer,
+                MetricDirection.LOWER_IS_BETTER,
+                1.2,
+                hard_maximum=0.25,
+            ),
+            BenchmarkMetric(
+                "command_completion_rate",
+                command_completion,
+                MetricDirection.HIGHER_IS_BETTER,
+                1.5,
+                hard_minimum=0.85,
+            ),
+            BenchmarkMetric(
+                "hallucination_rate",
+                hallucination_rate,
+                MetricDirection.LOWER_IS_BETTER,
+                1.5,
+                hard_maximum=0.08,
+            ),
+            BenchmarkMetric(
+                "computer_use_success_rate",
+                computer_use_success,
+                MetricDirection.HIGHER_IS_BETTER,
+                1.3,
+                hard_minimum=0.75,
+            ),
+            BenchmarkMetric(
+                "p95_turn_latency_ms",
+                p95_turn_latency_ms,
+                MetricDirection.LOWER_IS_BETTER,
+                1.1,
+                hard_maximum=4500,
+            ),
+            BenchmarkMetric(
+                "mission_success_rate",
+                mission_success,
+                MetricDirection.HIGHER_IS_BETTER,
+                1.3,
+                hard_minimum=0.75,
+            ),
+            BenchmarkMetric(
+                "mission_recovery_rate",
+                recovery_rate,
+                MetricDirection.HIGHER_IS_BETTER,
+                1.0,
+                hard_minimum=0.60,
+            ),
+            BenchmarkMetric(
+                "memory_retrieval_precision",
+                memory_precision,
+                MetricDirection.HIGHER_IS_BETTER,
+                1.0,
+                hard_minimum=0.75,
+            ),
+            BenchmarkMetric(
+                "crash_free_session_rate",
+                crash_free_rate,
+                MetricDirection.HIGHER_IS_BETTER,
+                1.8,
+                hard_minimum=0.98,
+            ),
         ),
     )

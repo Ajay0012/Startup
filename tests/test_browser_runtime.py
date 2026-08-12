@@ -48,7 +48,11 @@ class FakeBrowserAdapter:
 
 def snapshot(*elements: BrowserElement) -> BrowserSnapshot:
     return BrowserSnapshot(
-        "https://example.com", "Example", "Untrusted page text", tuple(elements), BrowserState.VERIFIED
+        "https://example.com",
+        "Example",
+        "Untrusted page text",
+        tuple(elements),
+        BrowserState.VERIFIED,
     )
 
 

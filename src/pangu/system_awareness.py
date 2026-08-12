@@ -82,8 +82,12 @@ class SystemAwarenessRuntime:
             "percent",
             snapshot.battery_percent,
             0.95,
-            0.95 if snapshot.battery_percent is not None and snapshot.battery_percent <= 15 else 0.4,
-            "Battery is critically low." if snapshot.battery_percent is not None and snapshot.battery_percent <= 15 else "Battery level changed.",
+            0.95
+            if snapshot.battery_percent is not None and snapshot.battery_percent <= 15
+            else 0.4,
+            "Battery is critically low."
+            if snapshot.battery_percent is not None and snapshot.battery_percent <= 15
+            else "Battery level changed.",
         )
         await self._observe(
             "system.power",
@@ -108,7 +112,9 @@ class SystemAwarenessRuntime:
             round(snapshot.memory_percent, 1),
             0.9,
             0.85 if snapshot.memory_percent >= 90 else 0.3,
-            "Memory pressure is very high." if snapshot.memory_percent >= 90 else "Memory usage changed.",
+            "Memory pressure is very high."
+            if snapshot.memory_percent >= 90
+            else "Memory usage changed.",
             change_threshold=10.0,
         )
         await self._observe(
@@ -117,7 +123,9 @@ class SystemAwarenessRuntime:
             snapshot.network_available,
             0.9,
             0.9 if not snapshot.network_available else 0.55,
-            "Network connectivity is unavailable." if not snapshot.network_available else "Network connectivity was restored.",
+            "Network connectivity is unavailable."
+            if not snapshot.network_available
+            else "Network connectivity was restored.",
         )
         return snapshot
 

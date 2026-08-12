@@ -74,13 +74,23 @@ class IncomingCallPolicyEngine:
             if rules.reject_spam_suspect:
                 return IncomingCallDecision(IncomingCallAction.REJECT, "spam-suspect caller", False)
             if rules.silence_spam_suspect:
-                return IncomingCallDecision(IncomingCallAction.SILENCE, "spam-suspect caller", False)
-            return IncomingCallDecision(IncomingCallAction.ASK_OWNER, "spam classification is uncertain", False)
+                return IncomingCallDecision(
+                    IncomingCallAction.SILENCE, "spam-suspect caller", False
+                )
+            return IncomingCallDecision(
+                IncomingCallAction.ASK_OWNER, "spam classification is uncertain", False
+            )
         if context.caller_trust == CallerTrust.PRIVATE and rules.never_auto_answer_private:
-            return IncomingCallDecision(IncomingCallAction.RING_OWNER, "private caller cannot be auto-answered", False)
+            return IncomingCallDecision(
+                IncomingCallAction.RING_OWNER, "private caller cannot be auto-answered", False
+            )
         if context.caller_trust == CallerTrust.UNKNOWN and rules.never_auto_answer_unknown:
-            return IncomingCallDecision(IncomingCallAction.RING_OWNER, "unknown caller cannot be auto-answered", False)
-        if rules.require_fresh_auth_to_auto_answer and (context.device_locked or not context.fresh_device_auth):
+            return IncomingCallDecision(
+                IncomingCallAction.RING_OWNER, "unknown caller cannot be auto-answered", False
+            )
+        if rules.require_fresh_auth_to_auto_answer and (
+            context.device_locked or not context.fresh_device_auth
+        ):
             return IncomingCallDecision(
                 IncomingCallAction.ASK_OWNER,
                 "fresh device authentication is required for autonomous answering",
@@ -98,12 +108,20 @@ class IncomingCallPolicyEngine:
         ) or (
             context.caller_trust == CallerTrust.KNOWN and rules.assistant_may_handle_known_callers
         )
-        if not allowed and not (not context.owner_present and rules.assistant_may_screen_when_owner_absent):
-            return IncomingCallDecision(IncomingCallAction.RING_OWNER, "caller is outside assistant delegation rules", False)
+        if not allowed and not (
+            not context.owner_present and rules.assistant_may_screen_when_owner_absent
+        ):
+            return IncomingCallDecision(
+                IncomingCallAction.RING_OWNER, "caller is outside assistant delegation rules", False
+            )
         if context.owner_in_meeting and not rules.allow_assistant_during_meeting:
-            return IncomingCallDecision(IncomingCallAction.SILENCE, "owner meeting policy blocks assistant handling", False)
+            return IncomingCallDecision(
+                IncomingCallAction.SILENCE, "owner meeting policy blocks assistant handling", False
+            )
         if context.driving and not rules.allow_assistant_while_driving:
-            return IncomingCallDecision(IncomingCallAction.RING_OWNER, "driving policy blocks assistant handling", False)
+            return IncomingCallDecision(
+                IncomingCallAction.RING_OWNER, "driving policy blocks assistant handling", False
+            )
         if context.quiet_hours and context.caller_trust != CallerTrust.VIP:
             return IncomingCallDecision(IncomingCallAction.SILENCE, "quiet-hours policy", False)
         return IncomingCallDecision(

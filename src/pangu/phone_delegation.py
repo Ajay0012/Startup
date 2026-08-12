@@ -81,7 +81,11 @@ class DelegationEnvelope:
     transcript_retention: bool = False
 
     def __post_init__(self) -> None:
-        if not self.purpose.strip() or not self.target.strip() or not self.requested_service.strip():
+        if (
+            not self.purpose.strip()
+            or not self.target.strip()
+            or not self.requested_service.strip()
+        ):
             raise ValueError("delegation purpose, target and requested service are required")
         if self.max_price is not None and self.max_price < 0:
             raise ValueError("max_price cannot be negative")
@@ -194,7 +198,10 @@ class DelegationPolicyEngine:
     def _time_allowed(self, proposal: CounterpartyProposal) -> bool:
         if proposal.date is None or proposal.minute is None:
             return False
-        return any(window.contains(proposal.date, proposal.minute) for window in self.envelope.acceptable_windows)
+        return any(
+            window.contains(proposal.date, proposal.minute)
+            for window in self.envelope.acceptable_windows
+        )
 
     def evaluate(self, proposal: CounterpartyProposal) -> PolicyDecision:
         if proposal.field in self._always_confirm:
@@ -207,48 +214,92 @@ class DelegationPolicyEngine:
             )
         if proposal.field == ProposalField.TIME:
             if self.envelope.allow_time_change_within_window and self._time_allowed(proposal):
-                return PolicyDecision(ProposalDecision.AUTO_ACCEPT, "time remains inside the approved window", proposal)
+                return PolicyDecision(
+                    ProposalDecision.AUTO_ACCEPT,
+                    "time remains inside the approved window",
+                    proposal,
+                )
             token = self.confirmations.issue(proposal)
-            return PolicyDecision(ProposalDecision.ASK_OWNER, "time is outside the pre-approved window", proposal, token)
+            return PolicyDecision(
+                ProposalDecision.ASK_OWNER,
+                "time is outside the pre-approved window",
+                proposal,
+                token,
+            )
         if proposal.field == ProposalField.DATE:
-            if proposal.date is not None and any(window.date == proposal.date for window in self.envelope.acceptable_windows):
-                return PolicyDecision(ProposalDecision.AUTO_ACCEPT, "date is already approved", proposal)
+            if proposal.date is not None and any(
+                window.date == proposal.date for window in self.envelope.acceptable_windows
+            ):
+                return PolicyDecision(
+                    ProposalDecision.AUTO_ACCEPT, "date is already approved", proposal
+                )
             token = self.confirmations.issue(proposal)
-            return PolicyDecision(ProposalDecision.ASK_OWNER, "date was not pre-approved", proposal, token)
+            return PolicyDecision(
+                ProposalDecision.ASK_OWNER, "date was not pre-approved", proposal, token
+            )
         if proposal.field == ProposalField.LOCATION:
             location = (proposal.location or str(proposal.value)).casefold().strip()
             allowed = {item.casefold().strip() for item in self.envelope.allowed_locations}
             if location and location in allowed:
-                return PolicyDecision(ProposalDecision.AUTO_ACCEPT, "location is approved", proposal)
+                return PolicyDecision(
+                    ProposalDecision.AUTO_ACCEPT, "location is approved", proposal
+                )
             token = self.confirmations.issue(proposal)
-            return PolicyDecision(ProposalDecision.ASK_OWNER, "location change requires confirmation", proposal, token)
+            return PolicyDecision(
+                ProposalDecision.ASK_OWNER, "location change requires confirmation", proposal, token
+            )
         if proposal.field == ProposalField.PROVIDER:
             provider = (proposal.provider or str(proposal.value)).casefold().strip()
             allowed = {item.casefold().strip() for item in self.envelope.allowed_providers}
             if provider and provider in allowed:
-                return PolicyDecision(ProposalDecision.AUTO_ACCEPT, "provider is approved", proposal)
+                return PolicyDecision(
+                    ProposalDecision.AUTO_ACCEPT, "provider is approved", proposal
+                )
             token = self.confirmations.issue(proposal)
-            return PolicyDecision(ProposalDecision.ASK_OWNER, "provider change requires confirmation", proposal, token)
+            return PolicyDecision(
+                ProposalDecision.ASK_OWNER, "provider change requires confirmation", proposal, token
+            )
         if proposal.field == ProposalField.PRICE:
             if proposal.price is None:
                 token = self.confirmations.issue(proposal)
-                return PolicyDecision(ProposalDecision.ASK_OWNER, "price could not be verified", proposal, token)
-            if proposal.currency and proposal.currency.casefold() != self.envelope.currency.casefold():
+                return PolicyDecision(
+                    ProposalDecision.ASK_OWNER, "price could not be verified", proposal, token
+                )
+            if (
+                proposal.currency
+                and proposal.currency.casefold() != self.envelope.currency.casefold()
+            ):
                 token = self.confirmations.issue(proposal)
-                return PolicyDecision(ProposalDecision.ASK_OWNER, "currency changed", proposal, token)
+                return PolicyDecision(
+                    ProposalDecision.ASK_OWNER, "currency changed", proposal, token
+                )
             if self.envelope.max_price is not None and proposal.price <= self.envelope.max_price:
-                return PolicyDecision(ProposalDecision.AUTO_ACCEPT, "price is within the approved maximum", proposal)
+                return PolicyDecision(
+                    ProposalDecision.AUTO_ACCEPT, "price is within the approved maximum", proposal
+                )
             token = self.confirmations.issue(proposal)
-            return PolicyDecision(ProposalDecision.ASK_OWNER, "price exceeds or lacks an approved maximum", proposal, token)
+            return PolicyDecision(
+                ProposalDecision.ASK_OWNER,
+                "price exceeds or lacks an approved maximum",
+                proposal,
+                token,
+            )
         if proposal.field == ProposalField.SERVICE:
             candidate = " ".join(str(proposal.value).casefold().split())
             requested = " ".join(self.envelope.requested_service.casefold().split())
             if candidate == requested or self.envelope.allow_equivalent_service:
-                return PolicyDecision(ProposalDecision.AUTO_ACCEPT, "service is allowed by the delegation", proposal)
+                return PolicyDecision(
+                    ProposalDecision.AUTO_ACCEPT, "service is allowed by the delegation", proposal
+                )
             token = self.confirmations.issue(proposal)
             return PolicyDecision(ProposalDecision.ASK_OWNER, "service changed", proposal, token)
         token = self.confirmations.issue(proposal)
-        return PolicyDecision(ProposalDecision.ASK_OWNER, "unclassified material change requires confirmation", proposal, token)
+        return PolicyDecision(
+            ProposalDecision.ASK_OWNER,
+            "unclassified material change requires confirmation",
+            proposal,
+            token,
+        )
 
     def approve(self, proposal: CounterpartyProposal, token: str) -> bool:
         return self.confirmations.consume(proposal, token)
@@ -332,7 +383,11 @@ class DelegatedCallSession:
         if self.state != DelegationState.NEGOTIATING:
             raise RuntimeError("session is not negotiating")
         decision = self.policy.evaluate(proposal)
-        self._record("proposal", proposal.summary, sensitive=proposal.field in {ProposalField.PERSONAL_DATA, ProposalField.MEDICAL_DATA})
+        self._record(
+            "proposal",
+            proposal.summary,
+            sensitive=proposal.field in {ProposalField.PERSONAL_DATA, ProposalField.MEDICAL_DATA},
+        )
         if decision.decision == ProposalDecision.ASK_OWNER:
             self.pending = proposal
             self.pending_token = decision.confirmation_token
@@ -340,7 +395,9 @@ class DelegatedCallSession:
             self.transport.pause()
             self._record("owner_confirmation_required", decision.reason)
         elif decision.decision == ProposalDecision.REJECT:
-            self.transport.say("That change is outside my user's approved limits. Please offer another option.")
+            self.transport.say(
+                "That change is outside my user's approved limits. Please offer another option."
+            )
             self._record("proposal_rejected", decision.reason)
         else:
             self.transport.say("That works within the approved limits. Please continue.")
@@ -348,7 +405,11 @@ class DelegatedCallSession:
         return decision
 
     def owner_decision(self, *, approve: bool, token: str) -> bool:
-        if self.state != DelegationState.AWAITING_OWNER or self.pending is None or self.pending_token is None:
+        if (
+            self.state != DelegationState.AWAITING_OWNER
+            or self.pending is None
+            or self.pending_token is None
+        ):
             raise RuntimeError("no owner confirmation is pending")
         if token != self.pending_token:
             return False
@@ -359,10 +420,19 @@ class DelegatedCallSession:
         self.pending_token = None
         self.state = DelegationState.NEGOTIATING
         if approve:
-            self.transport.say("My user has approved that change. Please continue with the booking.")
-            self._record("owner_approved", proposal.summary, sensitive=proposal.field in {ProposalField.PERSONAL_DATA, ProposalField.MEDICAL_DATA})
+            self.transport.say(
+                "My user has approved that change. Please continue with the booking."
+            )
+            self._record(
+                "owner_approved",
+                proposal.summary,
+                sensitive=proposal.field
+                in {ProposalField.PERSONAL_DATA, ProposalField.MEDICAL_DATA},
+            )
         else:
-            self.transport.say("My user did not approve that change. Please keep the original constraints or offer another option.")
+            self.transport.say(
+                "My user did not approve that change. Please keep the original constraints or offer another option."
+            )
             self._record("owner_declined", proposal.summary)
         return True
 
@@ -374,7 +444,11 @@ class DelegatedCallSession:
         self.transport.end()
 
     def cancel(self, reason: str = "owner_cancelled") -> None:
-        if self.state in {DelegationState.BOOKED, DelegationState.CANCELLED, DelegationState.DECLINED}:
+        if self.state in {
+            DelegationState.BOOKED,
+            DelegationState.CANCELLED,
+            DelegationState.DECLINED,
+        }:
             return
         self.state = DelegationState.CANCELLED
         self._record("cancelled", reason)

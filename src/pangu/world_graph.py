@@ -71,14 +71,22 @@ class PersonalWorldGraph:
             return None
         return WorldRelation(fact.entity, predicate, object_id, fact.confidence, fact.source)
 
-    def relations(self, subject: str | None = None, *, limit: int = 500) -> tuple[WorldRelation, ...]:
-        facts = self.world.snapshot(prefix=subject, limit=limit) if subject else self.world.snapshot(limit=limit)
+    def relations(
+        self, subject: str | None = None, *, limit: int = 500
+    ) -> tuple[WorldRelation, ...]:
+        facts = (
+            self.world.snapshot(prefix=subject, limit=limit)
+            if subject
+            else self.world.snapshot(limit=limit)
+        )
         values = [relation for fact in facts if (relation := self._relation(fact)) is not None]
         if subject:
             values = [item for item in values if item.subject == subject]
         return tuple(values)
 
-    def neighbors(self, entity: str, *, depth: int = 2, max_entities: int = 64) -> WorldNeighborhood:
+    def neighbors(
+        self, entity: str, *, depth: int = 2, max_entities: int = 64
+    ) -> WorldNeighborhood:
         if not 0 <= depth <= 5:
             raise ValueError("depth must be between 0 and 5")
         if not 1 <= max_entities <= 256:

@@ -83,7 +83,9 @@ class AgentPlanner:
 
     @classmethod
     def validate_operations(cls, plan: MissionPlan) -> MissionPlan:
-        forbidden = [task.operation for task in plan.tasks if task.operation not in cls.ALLOWED_OPERATIONS]
+        forbidden = [
+            task.operation for task in plan.tasks if task.operation not in cls.ALLOWED_OPERATIONS
+        ]
         if forbidden:
             raise ValueError(
                 f"mission contains unsupported operations: {', '.join(sorted(set(forbidden)))}"

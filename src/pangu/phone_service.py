@@ -35,7 +35,9 @@ class PhoneIntelligenceService:
             "fresh_device_authentication": self.link.has_fresh_authentication(),
         }
 
-    def request_authentication(self, reason: str = "Authorize PANGU phone action") -> DeviceActionResult:
+    def request_authentication(
+        self, reason: str = "Authorize PANGU phone action"
+    ) -> DeviceActionResult:
         try:
             lease = self.link.queue_command(
                 PhoneCommand.AUTHENTICATE,
@@ -43,7 +45,9 @@ class PhoneIntelligenceService:
                 capability=PhoneCapability.AUTHENTICATE,
             )
         except (RuntimeError, PermissionError) as error:
-            return DeviceActionResult(False, "Phone authentication unavailable.", normalized_error=str(error))
+            return DeviceActionResult(
+                False, "Phone authentication unavailable.", normalized_error=str(error)
+            )
         return DeviceActionResult(
             True,
             "Authentication request queued on the paired phone.",
@@ -64,8 +68,12 @@ class PhoneIntelligenceService:
                 requires_device_auth=True,
             )
         except (RuntimeError, PermissionError) as error:
-            return DeviceActionResult(False, "Call could not be answered.", normalized_error=str(error))
-        return DeviceActionResult(True, "Answer-call command queued.", {"command_id": lease.command_id})
+            return DeviceActionResult(
+                False, "Call could not be answered.", normalized_error=str(error)
+            )
+        return DeviceActionResult(
+            True, "Answer-call command queued.", {"command_id": lease.command_id}
+        )
 
     def end_call(self, call_id: str | None = None) -> DeviceActionResult:
         payload = {"call_id": call_id.strip()[:200]} if call_id and call_id.strip() else {}
@@ -77,10 +85,16 @@ class PhoneIntelligenceService:
                 requires_device_auth=True,
             )
         except (RuntimeError, PermissionError) as error:
-            return DeviceActionResult(False, "Call could not be ended.", normalized_error=str(error))
-        return DeviceActionResult(True, "End-call command queued.", {"command_id": lease.command_id})
+            return DeviceActionResult(
+                False, "Call could not be ended.", normalized_error=str(error)
+            )
+        return DeviceActionResult(
+            True, "End-call command queued.", {"command_id": lease.command_id}
+        )
 
-    def start_delegation(self, envelope: DelegationEnvelope) -> tuple[str | None, DeviceActionResult]:
+    def start_delegation(
+        self, envelope: DelegationEnvelope
+    ) -> tuple[str | None, DeviceActionResult]:
         session = DelegatedCallSession(envelope, self.transport)
         session.prepare()
         session_id = self.orchestrator.register(session)

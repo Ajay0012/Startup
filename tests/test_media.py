@@ -148,9 +148,7 @@ class FakeMediaBrowserAdapter:
                     BrowserState.VERIFIED,
                 )
 
-        controls = (
-            BrowserElement("play", "button", "Pause" if self.playing else "Play"),
-        )
+        controls = (BrowserElement("play", "button", "Pause" if self.playing else "Play"),)
         return BrowserSnapshot(
             self.url,
             "Video page",

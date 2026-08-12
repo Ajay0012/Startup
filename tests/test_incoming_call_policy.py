@@ -25,9 +25,7 @@ def test_unknown_caller_is_not_auto_answered() -> None:
 
 
 def test_sensitive_context_blocks_assistant_handling() -> None:
-    engine = IncomingCallPolicyEngine(
-        IncomingCallRules(assistant_may_handle_vip_callers=True)
-    )
+    engine = IncomingCallPolicyEngine(IncomingCallRules(assistant_may_handle_vip_callers=True))
     decision = engine.decide(
         IncomingCallContext(
             caller_id="vip-1",
@@ -73,9 +71,7 @@ def test_known_caller_can_be_handled_only_with_media_and_fresh_auth() -> None:
 
 
 def test_locked_device_without_fresh_auth_requires_owner() -> None:
-    engine = IncomingCallPolicyEngine(
-        IncomingCallRules(assistant_may_handle_vip_callers=True)
-    )
+    engine = IncomingCallPolicyEngine(IncomingCallRules(assistant_may_handle_vip_callers=True))
     decision = engine.decide(
         IncomingCallContext(
             caller_id="vip-1",

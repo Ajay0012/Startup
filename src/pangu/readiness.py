@@ -80,13 +80,13 @@ class PanguReadinessInspector:
         checks.append(
             ReadinessCheck(
                 "gemini_api",
-                ReadinessState.READY
-                if self.settings.gemini_api_key
-                else ReadinessState.MISSING,
+                ReadinessState.READY if self.settings.gemini_api_key else ReadinessState.MISSING,
                 "Gemini API key configured."
                 if self.settings.gemini_api_key
                 else "Gemini API key is not configured.",
-                None if self.settings.gemini_api_key else "Set GEMINI_API_KEY in the repository .env file.",
+                None
+                if self.settings.gemini_api_key
+                else "Set GEMINI_API_KEY in the repository .env file.",
             )
         )
 
@@ -120,7 +120,9 @@ class PanguReadinessInspector:
                 ReadinessCheck(
                     "mediapipe",
                     ReadinessState.READY if self._module("mediapipe") else ReadinessState.MISSING,
-                    "MediaPipe installed." if self._module("mediapipe") else "MediaPipe is not installed.",
+                    "MediaPipe installed."
+                    if self._module("mediapipe")
+                    else "MediaPipe is not installed.",
                     None if self._module("mediapipe") else "Install PANGU with the vision extra.",
                 )
             )
@@ -147,7 +149,9 @@ class PanguReadinessInspector:
                 if desktop_required
                 else ReadinessState.OPTIONAL,
                 "pywinauto installed." if pywinauto else "pywinauto not installed.",
-                None if pywinauto else "Install PANGU with the desktop extra before enabling computer use.",
+                None
+                if pywinauto
+                else "Install PANGU with the desktop extra before enabling computer use.",
             )
         )
 
@@ -161,7 +165,9 @@ class PanguReadinessInspector:
                 else ReadinessState.MISSING
                 if browser_required
                 else ReadinessState.OPTIONAL,
-                "Playwright Python package installed." if playwright else "Playwright is not installed.",
+                "Playwright Python package installed."
+                if playwright
+                else "Playwright is not installed.",
                 None if playwright else "Install PANGU with the browser extra.",
             )
         )
@@ -181,9 +187,7 @@ class PanguReadinessInspector:
                 "Playwright browser cache found."
                 if chromium_installed
                 else "Playwright Chromium cache was not found.",
-                None
-                if chromium_installed
-                else "Run: python -m playwright install chromium",
+                None if chromium_installed else "Run: python -m playwright install chromium",
             )
         )
 

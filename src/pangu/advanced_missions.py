@@ -67,7 +67,10 @@ class AdaptiveMissionOrchestrator:
         current = await self._run(mission.mission_id)
         history.append(current)
         replans = 0
-        while current.state in {MissionState.FAILED, MissionState.PAUSED} and replans < self.max_replans:
+        while (
+            current.state in {MissionState.FAILED, MissionState.PAUSED}
+            and replans < self.max_replans
+        ):
             recovery = await self.recovery_planner(current)
             if not recovery.should_replan:
                 break
@@ -79,7 +82,12 @@ class AdaptiveMissionOrchestrator:
             ]
             revised = await self.planner.plan(
                 goal,
-                (*grounding, *recovery.grounding, *failure_context, f"replan_reason={recovery.reason}"),
+                (
+                    *grounding,
+                    *recovery.grounding,
+                    *failure_context,
+                    f"replan_reason={recovery.reason}",
+                ),
             )
             replacement = self.missions.create(
                 revised.goal,

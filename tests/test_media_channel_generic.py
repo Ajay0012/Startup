@@ -9,7 +9,9 @@ from pangu.media import MediaIntelligenceRuntime, MediaPlaybackState, MediaReque
 
 
 class GenericChannelBrowserAdapter:
-    def __init__(self, channel_name: str, handle: str, latest_title: str, specific_title: str) -> None:
+    def __init__(
+        self, channel_name: str, handle: str, latest_title: str, specific_title: str
+    ) -> None:
         self.channel_name = channel_name
         self.handle = handle
         self.latest_title = latest_title
@@ -146,11 +148,15 @@ async def test_latest_video_works_for_arbitrary_youtube_channels(
     handle: str,
     latest_title: str,
 ) -> None:
-    browser = BrowserRuntime(GenericChannelBrowserAdapter(channel, handle, latest_title, "Deep Dive"))
+    browser = BrowserRuntime(
+        GenericChannelBrowserAdapter(channel, handle, latest_title, "Deep Dive")
+    )
     await browser.start()
     try:
         media = MediaIntelligenceRuntime(browser)
-        result = await media.play(MediaRequest(f"latest video from {channel}", source=MediaSource.YOUTUBE))
+        result = await media.play(
+            MediaRequest(f"latest video from {channel}", source=MediaSource.YOUTUBE)
+        )
         assert result.state == MediaPlaybackState.VERIFIED_PLAYING
         assert result.candidate is not None
         assert result.candidate.channel_name == channel
@@ -179,11 +185,15 @@ async def test_specific_video_is_constrained_to_any_requested_channel(
     video_query: str,
     specific_title: str,
 ) -> None:
-    browser = BrowserRuntime(GenericChannelBrowserAdapter(channel, handle, "Newest Upload", specific_title))
+    browser = BrowserRuntime(
+        GenericChannelBrowserAdapter(channel, handle, "Newest Upload", specific_title)
+    )
     await browser.start()
     try:
         media = MediaIntelligenceRuntime(browser)
-        result = await media.play(MediaRequest(f"{video_query} from {channel}", source=MediaSource.YOUTUBE))
+        result = await media.play(
+            MediaRequest(f"{video_query} from {channel}", source=MediaSource.YOUTUBE)
+        )
         assert result.state == MediaPlaybackState.VERIFIED_PLAYING
         assert result.candidate is not None
         assert result.candidate.channel_name == channel
@@ -196,12 +206,16 @@ async def test_specific_video_is_constrained_to_any_requested_channel(
 
 
 def test_channel_scope_parser_is_not_tied_to_known_channel_names() -> None:
-    latest = MediaIntelligenceRuntime._youtube_scoped("latest video from Completely New Creator 2040")
+    latest = MediaIntelligenceRuntime._youtube_scoped(
+        "latest video from Completely New Creator 2040"
+    )
     assert latest is not None
     assert latest.channel == "Completely New Creator 2040"
     assert latest.latest is True
 
-    specific = MediaIntelligenceRuntime._youtube_scoped("space documentary from Future Science Channel")
+    specific = MediaIntelligenceRuntime._youtube_scoped(
+        "space documentary from Future Science Channel"
+    )
     assert specific is not None
     assert specific.channel == "Future Science Channel"
     assert specific.video_query == "space documentary"

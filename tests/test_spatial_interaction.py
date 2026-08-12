@@ -2,7 +2,9 @@ from pangu.gestures import GestureDetection, GestureKind
 from pangu.spatial_interaction import SpatialAction, SpatialInteractionController
 
 
-def detection(kind: GestureKind, metadata: dict[str, float | str] | None = None) -> GestureDetection:
+def detection(
+    kind: GestureKind, metadata: dict[str, float | str] | None = None
+) -> GestureDetection:
     return GestureDetection(kind, 0.9, ("right-0",), 1.0, metadata or {})
 
 

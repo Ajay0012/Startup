@@ -233,7 +233,9 @@ class MediaIntelligenceRuntime:
             re.IGNORECASE,
         )
         if specific:
-            return _YouTubeScopedRequest(specific.group(2).strip(), specific.group(1).strip(), False)
+            return _YouTubeScopedRequest(
+                specific.group(2).strip(), specific.group(1).strip(), False
+            )
         return None
 
     @classmethod
@@ -315,7 +317,16 @@ class MediaIntelligenceRuntime:
                 continue
             if parsed.path != "/watch" or not dict(parse_qsl(parsed.query)).get("v"):
                 continue
-            canonical = urlunparse(("https", "www.youtube.com", "/watch", "", urlencode({"v": dict(parse_qsl(parsed.query))["v"]}), ""))
+            canonical = urlunparse(
+                (
+                    "https",
+                    "www.youtube.com",
+                    "/watch",
+                    "",
+                    urlencode({"v": dict(parse_qsl(parsed.query))["v"]}),
+                    "",
+                )
+            )
             if canonical in seen:
                 continue
             lower = name.casefold()
@@ -469,7 +480,9 @@ class MediaIntelligenceRuntime:
             if existing is None or candidate.score > existing.score:
                 unique[href] = candidate
         return tuple(
-            sorted(unique.values(), key=lambda item: (item.score, len(item.title)), reverse=True)[:12]
+            sorted(unique.values(), key=lambda item: (item.score, len(item.title)), reverse=True)[
+                :12
+            ]
         )
 
     async def search(self, request: MediaRequest) -> MediaPlaybackResult:
@@ -511,7 +524,9 @@ class MediaIntelligenceRuntime:
         if scoped is not None and request.source in {MediaSource.AUTO, MediaSource.YOUTUBE}:
             return await self._search_youtube_channel(scoped, request.prefer_official)
 
-        specs = list(_SOURCES) if request.source == MediaSource.AUTO else [self._spec(request.source)]
+        specs = (
+            list(_SOURCES) if request.source == MediaSource.AUTO else [self._spec(request.source)]
+        )
         candidates: list[MediaCandidate] = []
         for spec in specs:
             if spec is None:

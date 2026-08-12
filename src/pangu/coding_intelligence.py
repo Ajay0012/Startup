@@ -125,15 +125,21 @@ class RepositorySemanticIndex:
                     tests.add(test.relative_to(self.root).as_posix())
         dependent.difference_update(changed)
         risk = min(1.0, len(changed) * 0.08 + len(dependent) * 0.025)
-        if any(path.endswith(("runtime.py", "runtime_builder.py", "database.py")) for path in changed):
+        if any(
+            path.endswith(("runtime.py", "runtime_builder.py", "database.py")) for path in changed
+        ):
             risk = min(1.0, risk + 0.3)
             reasons.append("core composition/runtime path changed")
-        if any(path.endswith(("voice.py", "realtime_voice.py", "computer_use.py")) for path in changed):
+        if any(
+            path.endswith(("voice.py", "realtime_voice.py", "computer_use.py")) for path in changed
+        ):
             risk = min(1.0, risk + 0.2)
             reasons.append("hardware/action critical path changed")
         if len(changed) > 6:
             reasons.append("wide change set")
-        return ImpactAnalysis(changed, tuple(sorted(dependent)), tuple(sorted(tests)), risk, tuple(reasons))
+        return ImpactAnalysis(
+            changed, tuple(sorted(dependent)), tuple(sorted(tests)), risk, tuple(reasons)
+        )
 
 
 class FailureLogDiagnoser:
@@ -156,7 +162,11 @@ class FailureLogDiagnoser:
                 category = label
                 confidence = 0.82
                 break
-        paths = tuple(dict.fromkeys(match.group(0).replace("\\", "/") for match in self._path.finditer(excerpt)))[:12]
+        paths = tuple(
+            dict.fromkeys(
+                match.group(0).replace("\\", "/") for match in self._path.finditer(excerpt)
+            )
+        )[:12]
         summary = f"Detected {category} failure"
         if paths:
             summary += f" involving {', '.join(paths[:4])}"

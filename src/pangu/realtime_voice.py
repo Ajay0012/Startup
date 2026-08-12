@@ -121,7 +121,9 @@ class RealtimeVoiceTurnCoordinator:
             fresh = [frame for frame in frames if frame.sequence > last_sequence]
             for frame in fresh:
                 last_sequence = max(last_sequence, frame.sequence)
-                activity = self.voice.vad.analyze(frame.samples, config.sample_rate, frame.timestamp)
+                activity = self.voice.vad.analyze(
+                    frame.samples, config.sample_rate, frame.timestamp
+                )
                 if activity.is_speech and first_speech_at is None:
                     first_speech_at = monotonic()
                 segment = controller.process(frame, activity, self.voice.session_id)
@@ -145,9 +147,7 @@ class RealtimeVoiceTurnCoordinator:
         candidate_start = initial_sequence
         while self._running and not speech_task.done():
             fresh = [
-                frame
-                for frame in self.voice.frames.recent(1200)
-                if frame.sequence > last_sequence
+                frame for frame in self.voice.frames.recent(1200) if frame.sequence > last_sequence
             ]
             for frame in fresh:
                 last_sequence = max(last_sequence, frame.sequence)
@@ -255,9 +255,7 @@ class RealtimeVoiceTurnCoordinator:
                 if segment is None:
                     self.failed_turns += 1
                     await self.voice.finish_turn("NO_COMMAND_SPEECH")
-                    barge_sequence = await self._speak_with_barge_in(
-                        "I didn't catch a command."
-                    )
+                    barge_sequence = await self._speak_with_barge_in("I didn't catch a command.")
                     if barge_sequence is not None and followup < self.barge_in.maximum_followups:
                         await self.voice.begin_barge_in()
                         self.voice.vad.reset()
@@ -274,7 +272,10 @@ class RealtimeVoiceTurnCoordinator:
                 )
                 speech_to_transcript_ms = (monotonic() - speech_ended) * 1000
                 segment.clear_samples()
-                if transcription.normalized_error or not transcription.normalized_transcript.strip():
+                if (
+                    transcription.normalized_error
+                    or not transcription.normalized_transcript.strip()
+                ):
                     self.failed_turns += 1
                     await self.events.publish(
                         EventEnvelope(

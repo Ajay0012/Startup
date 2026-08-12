@@ -137,7 +137,10 @@ def phone_router(container: ServiceContainer) -> APIRouter:
         if verified.kind == "authenticated":
             if payload.get("success") is True:
                 link.mark_authenticated(seconds=120)
-            return {"accepted": True, "fresh_device_authentication": link.has_fresh_authentication()}
+            return {
+                "accepted": True,
+                "fresh_device_authentication": link.has_fresh_authentication(),
+            }
         if verified.kind == "transcript_turn":
             try:
                 service.record_turn(
@@ -159,14 +162,24 @@ def phone_router(container: ServiceContainer) -> APIRouter:
                     date=str(payload["date"]) if payload.get("date") is not None else None,
                     minute=int(payload["minute"]) if payload.get("minute") is not None else None,
                     price=float(payload["price"]) if payload.get("price") is not None else None,
-                    currency=str(payload["currency"]) if payload.get("currency") is not None else None,
-                    location=str(payload["location"]) if payload.get("location") is not None else None,
-                    provider=str(payload["provider"]) if payload.get("provider") is not None else None,
+                    currency=str(payload["currency"])
+                    if payload.get("currency") is not None
+                    else None,
+                    location=str(payload["location"])
+                    if payload.get("location") is not None
+                    else None,
+                    provider=str(payload["provider"])
+                    if payload.get("provider") is not None
+                    else None,
                 )
                 decision = await service.handle_proposal(str(payload["session_id"]), proposal)
             except (KeyError, ValueError, TypeError) as error:
                 raise HTTPException(400, "Invalid phone proposal") from error
-            return {"accepted": True, "decision": decision.decision.value, "reason": decision.reason}
+            return {
+                "accepted": True,
+                "decision": decision.decision.value,
+                "reason": decision.reason,
+            }
         if verified.kind == "booked":
             try:
                 dossier = await service.mark_booked(

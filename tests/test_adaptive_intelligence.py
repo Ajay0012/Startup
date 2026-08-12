@@ -12,8 +12,12 @@ def test_repeated_verified_outcomes_induce_procedure(tmp_path: Path) -> None:
         memory = PersistentMemoryRuntime(database)
         learner = AdaptiveLearningRuntime(memory)
         for _ in range(3):
-            learner.record_outcome(ActionOutcome("application", "open", {"name": "Notepad"}, True, 20))
-        procedures = memory.recall("application open name", kinds=(MemoryKind.PROCEDURAL,), limit=10)
+            learner.record_outcome(
+                ActionOutcome("application", "open", {"name": "Notepad"}, True, 20)
+            )
+        procedures = memory.recall(
+            "application open name", kinds=(MemoryKind.PROCEDURAL,), limit=10
+        )
         assert procedures
         assert procedures[0].content["operation"] == "open"
     finally:
@@ -28,7 +32,9 @@ def test_repeated_failures_create_capability_gap(tmp_path: Path) -> None:
         learner = AdaptiveLearningRuntime(memory)
         for _ in range(3):
             learner.record_outcome(
-                ActionOutcome("browser", "navigate", {"url": "https://example.com"}, False, 10, "TIMEOUT")
+                ActionOutcome(
+                    "browser", "navigate", {"url": "https://example.com"}, False, 10, "TIMEOUT"
+                )
             )
         gaps = learner.capability_gaps("browser navigate")
         assert gaps

@@ -203,7 +203,11 @@ class Runtime:
         elif result.evidence.get("displays"):
             message = "Display brightness information is available."
         else:
-            message = result.normalized_error.value if result.normalized_error else result.observed_outcome
+            message = (
+                result.normalized_error.value
+                if result.normalized_error
+                else result.observed_outcome
+            )
         return ToolResult(request_id, status, message, result.public(), dict(result.evidence))
 
     @staticmethod
@@ -225,7 +229,9 @@ class Runtime:
             request_id, status, message, dict(result.evidence), {"confidence": result.confidence}
         )
 
-    def _remember_turn(self, command: CommandEnvelope, intent_name: str, result: ToolResult) -> None:
+    def _remember_turn(
+        self, command: CommandEnvelope, intent_name: str, result: ToolResult
+    ) -> None:
         if self.memory is None:
             return
         self.memory.remember(
@@ -258,7 +264,9 @@ class Runtime:
         try:
             result = asyncio.run(
                 self.model_router.gemini.generate_async(
-                    ModelRequest(prompt, role=role, trace_id=command.trace_id, mission_id="conversation")
+                    ModelRequest(
+                        prompt, role=role, trace_id=command.trace_id, mission_id="conversation"
+                    )
                 )
             )
         except RuntimeError:
@@ -285,7 +293,9 @@ class Runtime:
 
     def _screen_result(self, command: CommandEnvelope) -> ToolResult:
         if self.screen is None:
-            return ToolResult(command.command_id, Status.UNVERIFIED, "Screen perception is unavailable.")
+            return ToolResult(
+                command.command_id, Status.UNVERIFIED, "Screen perception is unavailable."
+            )
         snapshot = self.screen.capture()
         if snapshot.verification_state != "VERIFIED":
             return ToolResult(
@@ -300,9 +310,8 @@ class Runtime:
             for item in snapshot.elements
             if item.name and not item.is_password
         ][:12]
-        description = (
-            f"Active window: {snapshot.active_window_title or 'untitled'}. "
-            + ("Visible controls include " + "; ".join(names) if names else "No named controls found.")
+        description = f"Active window: {snapshot.active_window_title or 'untitled'}. " + (
+            "Visible controls include " + "; ".join(names) if names else "No named controls found."
         )
         return ToolResult(
             command.command_id,

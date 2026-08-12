@@ -131,7 +131,9 @@ class AdaptiveLearningRuntime:
             source="capability-gap-detector",
         )
 
-    def capability_gaps(self, query: str = "capability gap", limit: int = 10) -> tuple[CapabilityGap, ...]:
+    def capability_gaps(
+        self, query: str = "capability gap", limit: int = 10
+    ) -> tuple[CapabilityGap, ...]:
         records = self.memory.recall(query, kinds=(MemoryKind.SEMANTIC,), limit=limit)
         gaps: list[CapabilityGap] = []
         for item in records:

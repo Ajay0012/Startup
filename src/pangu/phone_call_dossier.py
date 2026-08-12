@@ -68,9 +68,17 @@ class CallDossierBuilder:
     _phone = re.compile(r"(?<!\d)(?:\+?\d[\d\s-]{7,}\d)(?!\d)")
     _email = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
     _money = re.compile(r"(?:₹|Rs\.?|INR|\$|USD|€|EUR)\s*([0-9][0-9,]*(?:\.\d{1,2})?)", re.I)
-    _reference = re.compile(r"\b(?:booking|appointment|reference|confirmation|ref)\s*(?:id|no\.?|number|code)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b", re.I)
-    _time = re.compile(r"\b(?:[01]?\d|2[0-3])[:.]([0-5]\d)\s*(?:am|pm)?\b|\b(?:1[0-2]|0?[1-9])\s*(?:am|pm)\b", re.I)
-    _date = re.compile(r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tomorrow)\b", re.I)
+    _reference = re.compile(
+        r"\b(?:booking|appointment|reference|confirmation|ref)\s*(?:id|no\.?|number|code)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b",
+        re.I,
+    )
+    _time = re.compile(
+        r"\b(?:[01]?\d|2[0-3])[:.]([0-5]\d)\s*(?:am|pm)?\b|\b(?:1[0-2]|0?[1-9])\s*(?:am|pm)\b", re.I
+    )
+    _date = re.compile(
+        r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tomorrow)\b",
+        re.I,
+    )
     _commitment_terms = (
         "confirmed",
         "booked",
@@ -112,7 +120,9 @@ class CallDossierBuilder:
         confidence: float = 1.0,
         sensitive: bool = False,
     ) -> CallTranscriptTurn:
-        turn = CallTranscriptTurn(speaker, " ".join(text.split())[:8000], confidence=confidence, sensitive=sensitive)
+        turn = CallTranscriptTurn(
+            speaker, " ".join(text.split())[:8000], confidence=confidence, sensitive=sensitive
+        )
         self._turns.append(turn)
         return turn
 
@@ -167,7 +177,13 @@ class CallDossierBuilder:
         for turn in self._turns:
             lower = turn.text.casefold()
             if any(term in lower for term in self._commitment_terms):
-                category = "booking" if any(term in lower for term in ("booked", "scheduled", "reserved", "confirmed")) else "promise"
+                category = (
+                    "booking"
+                    if any(
+                        term in lower for term in ("booked", "scheduled", "reserved", "confirmed")
+                    )
+                    else "promise"
+                )
                 result.append(CallCommitment(turn.speaker, turn.text[:1200], category))
         return tuple(result[:64])
 
@@ -180,7 +196,12 @@ class CallDossierBuilder:
         return tuple(dict.fromkeys(items))[:32]
 
     @staticmethod
-    def _briefing(outcome: str, facts: Iterable[CallFact], commitments: Iterable[CallCommitment], unresolved: Iterable[str]) -> str:
+    def _briefing(
+        outcome: str,
+        facts: Iterable[CallFact],
+        commitments: Iterable[CallCommitment],
+        unresolved: Iterable[str],
+    ) -> str:
         facts_list = list(facts)
         commitments_list = list(commitments)
         unresolved_list = list(unresolved)

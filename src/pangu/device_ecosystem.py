@@ -124,11 +124,15 @@ class HomeAssistantRestAdapter:
 
     def state(self, entity_id: str) -> DeviceActionResult:
         if "." not in entity_id or len(entity_id) > 200:
-            return DeviceActionResult(False, "Invalid entity id.", normalized_error="INVALID_ENTITY")
+            return DeviceActionResult(
+                False, "Invalid entity id.", normalized_error="INVALID_ENTITY"
+            )
         try:
             data = self._request("GET", f"/api/states/{entity_id}")
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-            return DeviceActionResult(False, str(error), normalized_error="HOME_ASSISTANT_UNAVAILABLE")
+            return DeviceActionResult(
+                False, str(error), normalized_error="HOME_ASSISTANT_UNAVAILABLE"
+            )
         return DeviceActionResult(True, f"Read {entity_id} state.", data)
 
     def call_service(
@@ -151,5 +155,7 @@ class HomeAssistantRestAdapter:
         try:
             result = self._request("POST", f"/api/services/{domain}/{service}", payload)
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-            return DeviceActionResult(False, str(error), normalized_error="HOME_ASSISTANT_UNAVAILABLE")
+            return DeviceActionResult(
+                False, str(error), normalized_error="HOME_ASSISTANT_UNAVAILABLE"
+            )
         return DeviceActionResult(True, f"Requested {domain}.{service} for {entity_id}.", result)

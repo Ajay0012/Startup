@@ -83,7 +83,10 @@ class ProcedureLearningRuntime:
         target = step.target.casefold()
         if step.sensitive or any(term in target for term in self._forbidden_targets):
             raise ValueError("sensitive fields cannot be learned into procedures")
-        if any(key.casefold() in {"password", "secret", "token", "otp", "cvv"} for key in step.arguments):
+        if any(
+            key.casefold() in {"password", "secret", "token", "otp", "cvv"}
+            for key in step.arguments
+        ):
             raise ValueError("sensitive arguments cannot be learned into procedures")
         if step.action == DemonstrationAction.CLICK_CONTROL:
             if "x" in step.arguments or "y" in step.arguments:
@@ -145,9 +148,7 @@ class ProcedureLearningRuntime:
         return procedure
 
     def verify(self, name: str) -> LearnedProcedure:
-        records = self.memory.recall(
-            f"procedure:{name}", kinds=(MemoryKind.PROCEDURAL,), limit=8
-        )
+        records = self.memory.recall(f"procedure:{name}", kinds=(MemoryKind.PROCEDURAL,), limit=8)
         record = next((item for item in records if item.subject == f"procedure:{name}"), None)
         if record is None:
             raise KeyError(name)
@@ -178,9 +179,7 @@ class ProcedureLearningRuntime:
         return LearnedProcedure(name, fingerprint, tuple(steps), parameters, True)
 
     def instantiate(self, name: str, parameters: dict[str, str]) -> tuple[DemonstrationStep, ...]:
-        records = self.memory.recall(
-            f"procedure:{name}", kinds=(MemoryKind.PROCEDURAL,), limit=8
-        )
+        records = self.memory.recall(f"procedure:{name}", kinds=(MemoryKind.PROCEDURAL,), limit=8)
         record = next((item for item in records if item.subject == f"procedure:{name}"), None)
         if record is None or record.content.get("verified") is not True:
             raise RuntimeError("procedure is missing or not owner-verified")

@@ -151,9 +151,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
 
         while self._running and monotonic() < deadline:
             fresh = [
-                frame
-                for frame in self.voice.frames.recent(3000)
-                if frame.sequence > last_sequence
+                frame for frame in self.voice.frames.recent(3000) if frame.sequence > last_sequence
             ]
             for frame in fresh:
                 last_sequence = max(last_sequence, frame.sequence)

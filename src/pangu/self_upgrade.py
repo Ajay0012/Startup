@@ -87,7 +87,9 @@ class SubprocessRunner:
             check=False,
             creationflags=no_window,
         )
-        return ProcessResult(completed.returncode, completed.stdout[-50_000:], completed.stderr[-50_000:])
+        return ProcessResult(
+            completed.returncode, completed.stdout[-50_000:], completed.stderr[-50_000:]
+        )
 
 
 class UpgradePolicy:
@@ -134,7 +136,10 @@ class UpgradePolicy:
             return False
         if candidate.startswith(cls.BLOCKED_PREFIXES):
             return False
-        return candidate.startswith(cls.ALLOWED_ROOTS) and Path(candidate).suffix.casefold() in cls.ALLOWED_SUFFIXES
+        return (
+            candidate.startswith(cls.ALLOWED_ROOTS)
+            and Path(candidate).suffix.casefold() in cls.ALLOWED_SUFFIXES
+        )
 
 
 class OwnerDirectedSelfUpgradeRuntime:
@@ -201,7 +206,9 @@ class OwnerDirectedSelfUpgradeRuntime:
             f"Repository inventory: {json.dumps(inventory)}"
         )
         result = await self.provider.generate_async(
-            ModelRequest(prompt, ModelRole.CODING, mission_id="self-upgrade-plan", timeout_seconds=45),
+            ModelRequest(
+                prompt, ModelRole.CODING, mission_id="self-upgrade-plan", timeout_seconds=45
+            ),
             structured=True,
         )
         if not result.text:
@@ -230,7 +237,12 @@ class OwnerDirectedSelfUpgradeRuntime:
             f"Current files: {json.dumps(context, ensure_ascii=False)}"
         )
         result = await self.provider.generate_async(
-            ModelRequest(prompt, ModelRole.CODING, mission_id="self-upgrade-implementation", timeout_seconds=90),
+            ModelRequest(
+                prompt,
+                ModelRole.CODING,
+                mission_id="self-upgrade-implementation",
+                timeout_seconds=90,
+            ),
             structured=True,
         )
         if not result.text:
@@ -258,16 +270,22 @@ class OwnerDirectedSelfUpgradeRuntime:
 
     def _test_command(self, worktree: Path) -> ProcessResult:
         if os.name == "nt":
-            powershell = shutil.which("pwsh") or shutil.which("powershell.exe") or shutil.which("powershell")
+            powershell = (
+                shutil.which("pwsh") or shutil.which("powershell.exe") or shutil.which("powershell")
+            )
             if not powershell:
                 return ProcessResult(127, "", "POWERSHELL_UNAVAILABLE")
-            return self.runner.run([powershell, "-NoProfile", "-File", "scripts/test.ps1"], worktree, 1800)
+            return self.runner.run(
+                [powershell, "-NoProfile", "-File", "scripts/test.ps1"], worktree, 1800
+            )
         return self.runner.run(["python", "-m", "pytest", "-q"], worktree, 1800)
 
     async def upgrade(self, request: str, *, promote: bool = False) -> UpgradeResult:
         feature = " ".join(request.strip().split())
         if len(feature) < 8:
-            return UpgradeResult(feature, "", None, False, False, (), "", "UPGRADE_REQUEST_TOO_VAGUE")
+            return UpgradeResult(
+                feature, "", None, False, False, (), "", "UPGRADE_REQUEST_TOO_VAGUE"
+            )
         try:
             base_sha = self._require_clean_repository()
             plan = await self._plan(feature, self.inventory())
@@ -280,9 +298,20 @@ class OwnerDirectedSelfUpgradeRuntime:
         branch = f"pangu-self/{token}"
         worktree = Path(tempfile.gettempdir()) / f"pangu-self-{token}"
         try:
-            created = self._git(["worktree", "add", "-b", branch, str(worktree), base_sha], timeout=180)
+            created = self._git(
+                ["worktree", "add", "-b", branch, str(worktree), base_sha], timeout=180
+            )
             if created.returncode != 0:
-                return UpgradeResult(feature, branch, None, False, False, (), changes.summary, "WORKTREE_CREATE_FAILED")
+                return UpgradeResult(
+                    feature,
+                    branch,
+                    None,
+                    False,
+                    False,
+                    (),
+                    changes.summary,
+                    "WORKTREE_CREATE_FAILED",
+                )
             changed: list[str] = []
             for replacement in changes.files:
                 relative = UpgradePolicy.normalize(replacement.path)
@@ -297,7 +326,16 @@ class OwnerDirectedSelfUpgradeRuntime:
 
             diff = self.runner.run(["git", "diff", "--check"], worktree, 120)
             if diff.returncode != 0:
-                return UpgradeResult(feature, branch, None, False, False, tuple(changed), changes.summary, "DIFF_VALIDATION_FAILED")
+                return UpgradeResult(
+                    feature,
+                    branch,
+                    None,
+                    False,
+                    False,
+                    tuple(changed),
+                    changes.summary,
+                    "DIFF_VALIDATION_FAILED",
+                )
             tests = self._test_command(worktree)
             if tests.returncode != 0:
                 return UpgradeResult(
@@ -315,24 +353,72 @@ class OwnerDirectedSelfUpgradeRuntime:
                 ["git", "commit", "-m", f"feat(self-upgrade): {feature[:72]}"], worktree, 180
             )
             if commit.returncode != 0:
-                return UpgradeResult(feature, branch, None, False, True, tuple(changed), changes.summary, "COMMIT_FAILED")
+                return UpgradeResult(
+                    feature,
+                    branch,
+                    None,
+                    False,
+                    True,
+                    tuple(changed),
+                    changes.summary,
+                    "COMMIT_FAILED",
+                )
             sha = self.runner.run(["git", "rev-parse", "HEAD"], worktree, 60).stdout.strip()
             backup: str | None = None
             promoted = False
             if promote:
                 current = self._git(["rev-parse", "HEAD"]).stdout.strip()
                 if current != base_sha:
-                    return UpgradeResult(feature, branch, sha, False, True, tuple(changed), changes.summary, "BASE_CHANGED_DURING_UPGRADE")
+                    return UpgradeResult(
+                        feature,
+                        branch,
+                        sha,
+                        False,
+                        True,
+                        tuple(changed),
+                        changes.summary,
+                        "BASE_CHANGED_DURING_UPGRADE",
+                    )
                 backup = f"pangu-backup/{token}"
                 if self._git(["branch", backup, base_sha]).returncode != 0:
-                    return UpgradeResult(feature, branch, sha, False, True, tuple(changed), changes.summary, "BACKUP_BRANCH_FAILED")
+                    return UpgradeResult(
+                        feature,
+                        branch,
+                        sha,
+                        False,
+                        True,
+                        tuple(changed),
+                        changes.summary,
+                        "BACKUP_BRANCH_FAILED",
+                    )
                 merge = self._git(["merge", "--ff-only", branch], timeout=180)
                 if merge.returncode != 0:
-                    return UpgradeResult(feature, branch, sha, False, True, tuple(changed), changes.summary, "PROMOTION_FAILED", backup)
+                    return UpgradeResult(
+                        feature,
+                        branch,
+                        sha,
+                        False,
+                        True,
+                        tuple(changed),
+                        changes.summary,
+                        "PROMOTION_FAILED",
+                        backup,
+                    )
                 promoted = True
-            return UpgradeResult(feature, branch, sha, promoted, True, tuple(changed), changes.summary, backup_branch=backup)
+            return UpgradeResult(
+                feature,
+                branch,
+                sha,
+                promoted,
+                True,
+                tuple(changed),
+                changes.summary,
+                backup_branch=backup,
+            )
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-            return UpgradeResult(feature, branch, None, False, False, (), changes.summary, f"UPGRADE_FAILED: {error}")
+            return UpgradeResult(
+                feature, branch, None, False, False, (), changes.summary, f"UPGRADE_FAILED: {error}"
+            )
         finally:
             if worktree.exists():
                 self._git(["worktree", "remove", "--force", str(worktree)], timeout=180)

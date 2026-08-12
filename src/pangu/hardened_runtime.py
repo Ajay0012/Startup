@@ -80,7 +80,9 @@ class HardenedRuntime(Runtime):
         chunks: list[str] = []
         try:
             async for chunk in provider.stream_async(
-                ModelRequest(prompt, role=role, trace_id=command.trace_id, mission_id="conversation")
+                ModelRequest(
+                    prompt, role=role, trace_id=command.trace_id, mission_id="conversation"
+                )
             ):
                 chunks.append(chunk)
                 yield chunk

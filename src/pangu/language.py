@@ -171,8 +171,12 @@ class LanguageRuntime:
             )
 
         if lower in {"what's on screen", "what is on screen", "describe screen", "read screen"}:
-            return NormalizedIntent("screen_snapshot", "Describe the active screen", clean, confidence=0.98)
-        desktop = re.fullmatch(r"(?:click|press|invoke)\s+(?:the\s+)?(.+?)(?:\s+(?:button|control))?", lower)
+            return NormalizedIntent(
+                "screen_snapshot", "Describe the active screen", clean, confidence=0.98
+            )
+        desktop = re.fullmatch(
+            r"(?:click|press|invoke)\s+(?:the\s+)?(.+?)(?:\s+(?:button|control))?", lower
+        )
         if desktop:
             return NormalizedIntent(
                 "invoke_control", clean, clean, {"target": desktop.group(1)}, 0.9
@@ -182,7 +186,9 @@ class LanguageRuntime:
             return NormalizedIntent(
                 "focus_control", clean, clean, {"target": desktop.group(1)}, 0.9
             )
-        desktop = re.fullmatch(r"type\s+(.+?)\s+(?:in|into)\s+(?:the\s+)?(.+)", clean, re.IGNORECASE)
+        desktop = re.fullmatch(
+            r"type\s+(.+?)\s+(?:in|into)\s+(?:the\s+)?(.+)", clean, re.IGNORECASE
+        )
         if desktop:
             return NormalizedIntent(
                 "set_control_text",
@@ -192,11 +198,22 @@ class LanguageRuntime:
                 0.9,
             )
 
-        browse = re.fullmatch(r"(?:browse|navigate|go)\s+(?:to\s+)?(https?://\S+)", clean, re.IGNORECASE)
+        browse = re.fullmatch(
+            r"(?:browse|navigate|go)\s+(?:to\s+)?(https?://\S+)", clean, re.IGNORECASE
+        )
         if browse:
-            return NormalizedIntent("browser_navigate", clean, clean, {"url": browse.group(1)}, 0.97)
-        if lower in {"read browser", "read browser page", "what's on this webpage", "what is on this webpage"}:
-            return NormalizedIntent("browser_read", "Read the current browser page", clean, confidence=0.97)
+            return NormalizedIntent(
+                "browser_navigate", clean, clean, {"url": browse.group(1)}, 0.97
+            )
+        if lower in {
+            "read browser",
+            "read browser page",
+            "what's on this webpage",
+            "what is on this webpage",
+        }:
+            return NormalizedIntent(
+                "browser_read", "Read the current browser page", clean, confidence=0.97
+            )
         web_click = re.fullmatch(r"click\s+browser\s+(button|link)\s+(.+)", lower)
         if web_click:
             return NormalizedIntent(
@@ -206,7 +223,9 @@ class LanguageRuntime:
                 {"role": web_click.group(1), "target": web_click.group(2)},
                 0.96,
             )
-        web_fill = re.fullmatch(r"fill\s+browser\s+(?:field|textbox)\s+(.+?)\s+with\s+(.+)", clean, re.IGNORECASE)
+        web_fill = re.fullmatch(
+            r"fill\s+browser\s+(?:field|textbox)\s+(.+?)\s+with\s+(.+)", clean, re.IGNORECASE
+        )
         if web_fill:
             return NormalizedIntent(
                 "browser_fill",
@@ -229,11 +248,11 @@ class LanguageRuntime:
                 {"memory": clean[clean.lower().find(memory.group(1)) :]},
                 0.97,
             )
-        recall = re.fullmatch(r"(?:what do you remember about|recall|remember anything about)\s+(.+)", lower)
+        recall = re.fullmatch(
+            r"(?:what do you remember about|recall|remember anything about)\s+(.+)", lower
+        )
         if recall:
-            return NormalizedIntent(
-                "recall_memory", clean, clean, {"query": recall.group(1)}, 0.96
-            )
+            return NormalizedIntent("recall_memory", clean, clean, {"query": recall.group(1)}, 0.96)
 
         app = re.fullmatch(
             r"(focus|minimize|maximize|restore|close|restart)\s+(.+?)(?:\s+(?:app|application))?",
@@ -247,7 +266,9 @@ class LanguageRuntime:
                 {"application": clean[len(app.group(1)) + 1 :]},
                 0.95,
             )
-        tanglish_app = re.fullmatch(r"(.+?)\s+ah\s+(focus|minimize|maximize|restore|close)\s+pannu", lower)
+        tanglish_app = re.fullmatch(
+            r"(.+?)\s+ah\s+(focus|minimize|maximize|restore|close)\s+pannu", lower
+        )
         if tanglish_app:
             return NormalizedIntent(
                 f"{tanglish_app.group(2)}_application",
@@ -295,7 +316,9 @@ class LanguageRuntime:
                 "ta-en" if "pannu" in lower or "ku" in lower else "en",
             )
         if lower in {"brightness", "brightness level", "what is the brightness"}:
-            return NormalizedIntent("get_brightness", "Read display brightness", clean, confidence=0.96)
+            return NormalizedIntent(
+                "get_brightness", "Read display brightness", clean, confidence=0.96
+            )
         system = re.fullmatch(
             r"(?:increase|raise|decrease|lower)\s+brightness(?:\s+(?:by )?(\d{1,3}))?", lower
         )
@@ -330,7 +353,9 @@ class LanguageRuntime:
                     entities = {"application": application}
                 return NormalizedIntent(
                     name,
-                    english if not entities or name == "open_application" else f"Create folder {match.group(1)}",
+                    english
+                    if not entities or name == "open_application"
+                    else f"Create folder {match.group(1)}",
                     clean,
                     entities,
                     0.98,

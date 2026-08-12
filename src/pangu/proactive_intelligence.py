@@ -59,7 +59,9 @@ class ContextualInterruptionPolicy:
             return self.quiet_start <= value < self.quiet_end
         return value >= self.quiet_start or value < self.quiet_end
 
-    def decide(self, candidate: ProactiveCandidate, context: AttentionContext) -> InterruptionDecision:
+    def decide(
+        self, candidate: ProactiveCandidate, context: AttentionContext
+    ) -> InterruptionDecision:
         if context.do_not_disturb and candidate.urgency < 0.95:
             return InterruptionDecision(False, 0.0, "do-not-disturb", "silent")
         if (context.user_speaking or context.pangu_speaking) and candidate.urgency < 0.9:
@@ -79,7 +81,9 @@ class ContextualInterruptionPolicy:
             score -= 0.08
         score = max(0.0, min(1.0, score))
         interrupt = score >= self.interrupt_threshold
-        presentation = "voice+hud" if interrupt and score >= 0.86 else "hud" if interrupt else "queue"
+        presentation = (
+            "voice+hud" if interrupt and score >= 0.86 else "hud" if interrupt else "queue"
+        )
         return InterruptionDecision(
             interrupt,
             score,

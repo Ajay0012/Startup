@@ -34,12 +34,17 @@ class PartialTranscriptStabilizer:
         self._last_tokens: list[str] = []
         self._counts: list[int] = []
 
-    def update(self, text: str, *, confidence: float = 1.0, is_final: bool = False) -> PartialHypothesis:
+    def update(
+        self, text: str, *, confidence: float = 1.0, is_final: bool = False
+    ) -> PartialHypothesis:
         clean = " ".join(text.strip().split())
         tokens = clean.split()
         new_counts: list[int] = []
         for index, token in enumerate(tokens):
-            if index < len(self._last_tokens) and self._last_tokens[index].casefold() == token.casefold():
+            if (
+                index < len(self._last_tokens)
+                and self._last_tokens[index].casefold() == token.casefold()
+            ):
                 previous = self._counts[index] if index < len(self._counts) else 0
                 new_counts.append(previous + 1)
             else:
@@ -103,7 +108,10 @@ class SemanticEndOfTurnDetector:
             score += 0.12
         if any(clean.endswith(" " + item) or clean == item for item in self._unfinished_suffixes):
             score -= 0.35
-        if any(clean.startswith(prefix) for prefix in self._repair_prefixes) and len(clean.split()) < 4:
+        if (
+            any(clean.startswith(prefix) for prefix in self._repair_prefixes)
+            and len(clean.split()) < 4
+        ):
             score -= 0.15
         if len(clean.split()) >= 3:
             score += 0.08
@@ -144,7 +152,9 @@ class ConversationActClassifier:
             return ConversationAct.CANCEL
         if self._repair.search(clean):
             return ConversationAct.REPAIR
-        if clean.endswith(tuple(" " + item for item in SemanticEndOfTurnDetector._unfinished_suffixes)):
+        if clean.endswith(
+            tuple(" " + item for item in SemanticEndOfTurnDetector._unfinished_suffixes)
+        ):
             return ConversationAct.INCOMPLETE
         return ConversationAct.COMMAND
 

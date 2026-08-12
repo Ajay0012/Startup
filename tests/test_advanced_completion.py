@@ -60,9 +60,7 @@ async def test_screen_observer_suppresses_password_context_from_fusion() -> None
         True,
         42,
     )
-    perception = _FakePerception(
-        ScreenSnapshot("fake", "VERIFIED", "Sign in", 42, (password,))
-    )
+    perception = _FakePerception(ScreenSnapshot("fake", "VERIFIED", "Sign in", 42, (password,)))
     fusion = MultimodalContextFusion()
     events = EventBus()
     await events.start()
@@ -133,7 +131,9 @@ class _FakeHello:
 
 
 @pytest.mark.asyncio
-async def test_contextual_identity_requires_explicit_strong_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_contextual_identity_requires_explicit_strong_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     clock = {"now": 100.0}
     monkeypatch.setattr("pangu.windows_identity.time.monotonic", lambda: clock["now"])
     hello = _FakeHello()

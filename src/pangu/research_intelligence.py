@@ -120,7 +120,9 @@ class ResearchIntelligenceRuntime:
         for index, left in enumerate(normalized):
             for right in normalized[index + 1 :]:
                 if self.contradictory(left, right):
-                    contradictions.append(Contradiction(left, right, "overlapping claim with opposite polarity"))
+                    contradictions.append(
+                        Contradiction(left, right, "overlapping claim with opposite polarity")
+                    )
         weights = {
             SourceTier.PRIMARY: 1.0,
             SourceTier.AUTHORITATIVE: 0.9,

@@ -83,7 +83,9 @@ class BrowserAdapter(Protocol):
 class PlaywrightBrowserAdapter:
     """Persistent isolated Chromium context; no connection to the user's normal profile."""
 
-    def __init__(self, profile_dir: Path, headless: bool = False, max_text_chars: int = 30_000) -> None:
+    def __init__(
+        self, profile_dir: Path, headless: bool = False, max_text_chars: int = 30_000
+    ) -> None:
         self.profile_dir = profile_dir
         self.headless = headless
         self.max_text_chars = max_text_chars
@@ -168,7 +170,9 @@ class PlaywrightBrowserAdapter:
                 for item in raw
                 if isinstance(item, dict)
             )
-            return BrowserSnapshot(url, title, text, elements, BrowserState.VERIFIED, True, truncated)
+            return BrowserSnapshot(
+                url, title, text, elements, BrowserState.VERIFIED, True, truncated
+            )
         except Exception:  # noqa: BLE001
             return BrowserSnapshot(
                 str(getattr(page, "url", "")),

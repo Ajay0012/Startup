@@ -123,7 +123,11 @@ class PersistentMissionRuntime:
         dependencies = {item.key: set(item.dependencies) for item in tasks}
         resolved: set[str] = set()
         while len(resolved) < len(tasks):
-            ready = {key for key, deps in dependencies.items() if key not in resolved and deps <= resolved}
+            ready = {
+                key
+                for key, deps in dependencies.items()
+                if key not in resolved and deps <= resolved
+            }
             if not ready:
                 raise ValueError("mission dependency graph contains a cycle")
             resolved.update(ready)
@@ -201,7 +205,12 @@ class PersistentMissionRuntime:
                 MissionCheckpointRow(
                     id=str(uuid4()),
                     mission_id=mission_id,
-                    payload={"kind": "state", "state": state.value, "reason": reason, "at": now.isoformat()},
+                    payload={
+                        "kind": "state",
+                        "state": state.value,
+                        "reason": reason,
+                        "at": now.isoformat(),
+                    },
                 )
             )
 
@@ -227,16 +236,22 @@ class PersistentMissionRuntime:
             current = self.snapshot(mission_id)
             if current.state in {MissionState.PAUSED, MissionState.CANCELLED}:
                 return current
-            completed = {task.task_id for task in current.tasks if task.state == MissionTaskState.COMPLETED}
+            completed = {
+                task.task_id for task in current.tasks if task.state == MissionTaskState.COMPLETED
+            }
             pending = [task for task in current.tasks if task.state == MissionTaskState.PENDING]
             if not pending:
-                final = MissionState.FAILED if any(
-                    task.state == MissionTaskState.FAILED for task in current.tasks
-                ) else MissionState.COMPLETED
+                final = (
+                    MissionState.FAILED
+                    if any(task.state == MissionTaskState.FAILED for task in current.tasks)
+                    else MissionState.COMPLETED
+                )
                 self._set_state(mission_id, final, "terminal")
                 await self.events.publish(
                     EventEnvelope(
-                        "mission.completed" if final == MissionState.COMPLETED else "mission.failed",
+                        "mission.completed"
+                        if final == MissionState.COMPLETED
+                        else "mission.failed",
                         {"mission_id": mission_id, "state": final.value},
                     )
                 )
@@ -255,7 +270,11 @@ class PersistentMissionRuntime:
             await self.events.publish(
                 EventEnvelope(
                     "mission.task.started",
-                    {"mission_id": mission_id, "task_id": task.task_id, "operation": task.operation},
+                    {
+                        "mission_id": mission_id,
+                        "task_id": task.task_id,
+                        "operation": task.operation,
+                    },
                     EventPriority.LOW,
                 )
             )

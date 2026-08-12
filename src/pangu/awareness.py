@@ -88,7 +88,9 @@ class ProactiveAwarenessRuntime:
         self._hourly.append(now)
         return True
 
-    async def _emit_notice(self, subject: str, message: str, importance: float, evidence: dict[str, object]) -> None:
+    async def _emit_notice(
+        self, subject: str, message: str, importance: float, evidence: dict[str, object]
+    ) -> None:
         key = self._key(subject)
         if not self._admit(key, importance):
             return
