@@ -25,6 +25,11 @@ class EventEnvelope:
     trace_id: str | None = None
     version: int = 1
 
+    @property
+    def topic(self) -> str:
+        """Backward-compatible alias for subscribers that predate ``event_type``."""
+        return self.event_type
+
 
 EventHandler = Callable[[EventEnvelope], Awaitable[None]]
 
@@ -84,7 +89,11 @@ class EventBus:
                 for handler in tuple(self._handlers.get(event.event_type, [])):
                     try:
                         await asyncio.wait_for(handler(event), timeout=self.handler_timeout)
-                    except (TimeoutError, RuntimeError, ValueError, OSError):
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # A subscriber is not allowed to terminate the single EventBus worker.
+                        # Preserve the envelope for diagnostics while continuing other events.
                         self.dead_letters.append(event)
             finally:
                 self._queue.task_done()
