@@ -112,7 +112,10 @@ class MultimodalContextFusion:
                 Modality.WINDOWS: 0.10,
                 Modality.CAMERA: 0.08,
             }.get(signal.modality, 0.0)
-            score = min(1.0, signal.confidence * 0.65 + recency * 0.25 + modality_bonus)
+            # Normalize rather than clamp. Clamping high-confidence candidates to 1.0
+            # erased the intentional gesture-vs-screen priority and created false
+            # ambiguity for deictic phrases such as "open that".
+            score = (signal.confidence * 0.65 + recency * 0.25 + modality_bonus) / 1.14
             evidence = (
                 f"modality={signal.modality.value}",
                 f"kind={signal.kind}",
