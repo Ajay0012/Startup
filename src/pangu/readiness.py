@@ -65,6 +65,20 @@ class PanguReadinessInspector:
             action,
         )
 
+    def _artifact_set(
+        self,
+        name: str,
+        directory: Path,
+        required_files: tuple[str, ...],
+        *,
+        action: str,
+    ) -> ReadinessCheck:
+        missing = [item for item in required_files if not (directory / item).is_file()]
+        if not missing:
+            return ReadinessCheck(name, ReadinessState.READY, str(directory))
+        detail = f"Incomplete: {directory}; missing: {', '.join(missing)}"
+        return ReadinessCheck(name, ReadinessState.MISSING, detail, action)
+
     def inspect(self) -> ReadinessReport:
         checks: list[ReadinessCheck] = []
         supported_python = sys.version_info >= (3, 12) and sys.version_info < (3, 15)
@@ -91,18 +105,26 @@ class PanguReadinessInspector:
         )
 
         checks.append(
-            self._file(
+            self._artifact_set(
                 "whisper_model",
                 self.root / "models" / "voice" / "whisper",
-                required=True,
+                ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
                 action="Install the configured local Faster Whisper model under models/voice/whisper.",
             )
         )
         checks.append(
-            self._file(
+            self._artifact_set(
                 "wake_model",
                 self.root / "models" / "voice" / "wake" / "sherpa-kws",
-                required=True,
+                (
+                    "encoder.onnx",
+                    "decoder.onnx",
+                    "joiner.onnx",
+                    "tokens.txt",
+                    "keywords.txt",
+                    "en.phone",
+                    "manifest.json",
+                ),
                 action="Run scripts/install-wake-model.ps1 with the trusted model archive SHA-256.",
             )
         )
