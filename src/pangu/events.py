@@ -48,6 +48,11 @@ class EventBus:
         self.dead_letters: list[EventEnvelope] = []
         self.handler_timeout = handler_timeout
 
+    @property
+    def running(self) -> bool:
+        """Whether the single EventBus worker is currently accepting events."""
+        return self._running
+
     def subscribe(self, event_type: str, handler: EventHandler) -> None:
         handlers = self._handlers.setdefault(event_type, [])
         if handler not in handlers:
