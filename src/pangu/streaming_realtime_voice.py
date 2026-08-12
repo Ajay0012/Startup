@@ -8,7 +8,6 @@ from time import monotonic
 from .advanced_realtime_voice import AdvancedRealtimeVoiceTurnCoordinator
 from .conversation_intelligence import ConversationAct
 from .events import EventEnvelope, EventPriority
-from .production_voice import ProductionVoiceSessionRuntime
 from .realtime_voice import RealtimeTurnMetrics, RealtimeVoiceTurnCoordinator
 from .voice import AudioFrame, VoiceState
 
@@ -85,7 +84,7 @@ class StreamingAdvancedRealtimeVoiceTurnCoordinator(AdvancedRealtimeVoiceTurnCoo
         self._last_response_text = complete.strip() or None
         return None, first_chunk_ms, complete
 
-    async def _run_turn(self, wake_event: EventEnvelope) -> None:  # noqa: C901
+    async def _run_turn(self, wake_event: EventEnvelope) -> None:
         turn_started = monotonic()
         minimum_sequence = 0
         wake_to_speech_ms = 0.0

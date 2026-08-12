@@ -33,9 +33,9 @@ class WindowsHelloVerifier:
     async def verify(self, message: str = "Verify your identity for PANGU") -> StrongAuthResult:
         try:
             module = import_module("winrt.windows.security.credentials.ui")
-            verifier = getattr(module, "UserConsentVerifier")
-            availability_enum = getattr(module, "UserConsentVerifierAvailability")
-            result_enum = getattr(module, "UserConsentVerificationResult")
+            verifier = module.UserConsentVerifier
+            availability_enum = module.UserConsentVerifierAvailability
+            result_enum = module.UserConsentVerificationResult
         except (ImportError, ModuleNotFoundError, AttributeError):
             return StrongAuthResult(
                 StrongAuthState.UNAVAILABLE,

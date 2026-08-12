@@ -11,7 +11,6 @@ from pangu.phone_link import (
     PhoneLinkRuntime,
 )
 
-
 SECRET = "s" * 64
 
 
@@ -24,9 +23,7 @@ def signed_message(
     payload: dict[str, object] | None = None,
 ) -> PhoneLinkMessage:
     body = payload or {"capabilities": ["place_call"]}
-    signature = runtime._sign(  # noqa: SLF001 - regression test covers protocol primitive.
-        "phone-1", sequence, kind, now, now + 30, body
-    )
+    signature = runtime._sign("phone-1", sequence, kind, now, now + 30, body)
     return PhoneLinkMessage("phone-1", sequence, kind, now, now + 30, body, signature)
 
 
@@ -127,7 +124,7 @@ def test_phone_link_wire_command_is_signed_and_bounded() -> None:
     raw = json.dumps(wire)
     parsed = json.loads(raw)
     payload = parsed["payload"]
-    expected = runtime._sign(  # noqa: SLF001
+    expected = runtime._sign(
         parsed["device_id"],
         parsed["sequence"],
         parsed["kind"],

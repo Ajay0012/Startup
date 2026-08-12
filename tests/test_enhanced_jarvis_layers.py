@@ -9,15 +9,15 @@ from pangu.memory import PersistentMemoryRuntime
 from pangu.multimodal import ContextSignal, Modality, MultimodalContextFusion
 from pangu.offline_intelligence import DeterministicOfflineIntelligence
 from pangu.predictive_intelligence import PredictiveBehaviorRuntime
-from pangu.procedure_learning import (
-    DemonstrationAction,
-    DemonstrationStep,
-    ProcedureLearningRuntime,
-)
 from pangu.proactive_intelligence import (
     AttentionContext,
     ContextualInterruptionPolicy,
     ProactiveCandidate,
+)
+from pangu.procedure_learning import (
+    DemonstrationAction,
+    DemonstrationStep,
+    ProcedureLearningRuntime,
 )
 from pangu.research_intelligence import ResearchEvidence, ResearchIntelligenceRuntime
 from pangu.screen_vision import (

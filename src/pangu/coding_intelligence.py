@@ -144,12 +144,12 @@ class RepositorySemanticIndex:
 
 class FailureLogDiagnoser:
     _patterns = (
-        (re.compile(r"mypy|incompatible type|has no attribute", re.I), "typing"),
-        (re.compile(r"ruff|format|line too long|unused import", re.I), "lint"),
-        (re.compile(r"assertionerror|failed\s+tests?|pytest", re.I), "test"),
-        (re.compile(r"dotnet|cs\d{4}|build failed", re.I), "dotnet"),
-        (re.compile(r"timeout|timed out", re.I), "timeout"),
-        (re.compile(r"modulenotfounderror|importerror", re.I), "dependency"),
+        (re.compile(r"mypy|incompatible type|has no attribute", re.IGNORECASE), "typing"),
+        (re.compile(r"ruff|format|line too long|unused import", re.IGNORECASE), "lint"),
+        (re.compile(r"assertionerror|failed\s+tests?|pytest", re.IGNORECASE), "test"),
+        (re.compile(r"dotnet|cs\d{4}|build failed", re.IGNORECASE), "dotnet"),
+        (re.compile(r"timeout|timed out", re.IGNORECASE), "timeout"),
+        (re.compile(r"modulenotfounderror|importerror", re.IGNORECASE), "dependency"),
     )
     _path = re.compile(r"(?:[A-Za-z]:\\|/)?(?:[\w.-]+[/\\])+[\w.-]+\.(?:py|cs|ps1|toml)")
 

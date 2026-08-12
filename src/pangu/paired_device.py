@@ -7,8 +7,8 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import quote, urlparse
 
 from .device_ecosystem import DeviceActionResult

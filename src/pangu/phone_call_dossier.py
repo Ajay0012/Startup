@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Iterable
 
 
 class CallSpeaker(StrEnum):
@@ -67,18 +67,20 @@ class CallDossierBuilder:
 
     _phone = re.compile(r"(?<!\d)(?:\+?\d[\d\s-]{7,}\d)(?!\d)")
     _email = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-    _money = re.compile(r"(?:₹|Rs\.?|INR|\$|USD|€|EUR)\s*([0-9][0-9,]*(?:\.\d{1,2})?)", re.I)
+    _money = re.compile(
+        r"(?:₹|Rs\.?|INR|\$|USD|€|EUR)\s*([0-9][0-9,]*(?:\.\d{1,2})?)", re.IGNORECASE
+    )
     _reference = re.compile(
         r"\b(?:booking|appointment(?:\s+reference)?|reference|confirmation|ref)\s*(?:id|no\.?|number|code)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b",
-        re.I,
+        re.IGNORECASE,
     )
     _time = re.compile(
         r"\b(?:[01]?\d|2[0-3])[:.]([0-5]\d)\s*(?:am|pm)?\b|\b(?:1[0-2]|0?[1-9])\s*(?:am|pm)\b",
-        re.I,
+        re.IGNORECASE,
     )
     _date = re.compile(
         r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tomorrow)\b",
-        re.I,
+        re.IGNORECASE,
     )
     _commitment_terms = (
         "confirmed",

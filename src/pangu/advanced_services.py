@@ -11,15 +11,15 @@ from .memory import PersistentMemoryRuntime
 from .multimodal import MultimodalContextFusion
 from .ocr_tesseract import TesseractOcrProvider
 from .predictive_intelligence import PredictiveBehaviorRuntime
-from .procedure_learning import ProcedureLearningRuntime
 from .proactive_intelligence import ContextualInterruptionPolicy
+from .procedure_learning import ProcedureLearningRuntime
 from .resilience import ResilientLoadManager, SelfHealingSupervisor
 from .resilience_runtime import ResilienceRuntime
 from .screen_observer import ScreenObservationPolicy, ScreenObservationRuntime
 from .screen_perception import ScreenPerceptionRuntime
 from .screen_vision import PillowScreenCaptureProvider, ScreenVisionRuntime
-from .speaker_identity import IdentityTrustEngine, SpeakerIdentityRuntime
 from .spatial_fusion import GestureHudFusionRuntime
+from .speaker_identity import IdentityTrustEngine, SpeakerIdentityRuntime
 from .windows_extended import ExtendedWindowsRuntime
 from .windows_identity import ContextualIdentitySecurity
 from .world_graph import PersonalWorldGraph

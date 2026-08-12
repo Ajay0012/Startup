@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Generic, TypeVar
 
-
 T = TypeVar("T")
 
 
@@ -177,14 +176,14 @@ class ResilientLoadManager(Generic[T]):
             candidates,
             key=lambda item: (
                 item.in_flight / item.weight,
-                item.ewma_latency_ms if item.ewma_latency_ms > 0 else 0,
+                max(0, item.ewma_latency_ms),
                 item.name,
             ),
         )
 
     async def _admit(self) -> None:
         async with self._lock:
-            in_flight = self._max_concurrency - self._semaphore._value  # noqa: SLF001
+            in_flight = self._max_concurrency - self._semaphore._value
             if in_flight >= self._max_concurrency and self._queue_depth >= self._max_queue:
                 self._rejected += 1
                 raise OverloadedError("PANGU load manager is saturated; request shed safely")
@@ -216,7 +215,7 @@ class ResilientLoadManager(Generic[T]):
                     result = await asyncio.wait_for(
                         operation(endpoint.name), timeout=timeout_seconds
                     )
-                except asyncio.TimeoutError as error:
+                except TimeoutError as error:
                     endpoint.timeouts += 1
                     endpoint.breaker.failure()
                     self._recent_failures.append(time.monotonic())

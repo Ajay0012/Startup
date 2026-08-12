@@ -64,10 +64,10 @@ class WindowsUIAutomationAdapter:
         try:
             rect = value
             return ScreenRect(
-                int(getattr(rect, "left")),
-                int(getattr(rect, "top")),
-                int(getattr(rect, "right")),
-                int(getattr(rect, "bottom")),
+                int(rect.left),
+                int(rect.top),
+                int(rect.right),
+                int(rect.bottom),
             )
         except (AttributeError, TypeError, ValueError):
             return ScreenRect(0, 0, 0, 0)

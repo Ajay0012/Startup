@@ -37,7 +37,7 @@ class FasterWhisperTranscriptionProvider:
             return False
         try:
             module = import_module("faster_whisper")
-            model_type = getattr(module, "WhisperModel")
+            model_type = module.WhisperModel
             self._model = model_type(
                 str(self.model_path),
                 device=self.device,
