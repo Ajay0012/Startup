@@ -93,7 +93,9 @@ class SherpaKeywordSpotterWakeWordEngine:
 
     @property
     def personalized_enabled(self) -> bool:
-        return self.config.personalized_profile is not None and self.config.speaker_model is not None
+        return (
+            self.config.personalized_profile is not None and self.config.speaker_model is not None
+        )
 
     def _personalized_verifier(self) -> PersonalizedWakeWordVerifier:
         if not self.personalized_enabled:
