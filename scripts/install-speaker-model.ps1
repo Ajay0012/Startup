@@ -6,8 +6,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $targetDir = Join-Path $root 'models\voice\speaker'
-$target = Join-Path $targetDir '3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx'
-$url = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx'
+$modelName = '3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx'
+$target = Join-Path $targetDir $modelName
+$url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/$modelName"
 $temp = Join-Path $env:TEMP 'pangu-owner-speaker-model.onnx'
 
 if ((Test-Path -LiteralPath $target) -and -not $Force) {
