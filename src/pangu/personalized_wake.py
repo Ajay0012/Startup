@@ -81,7 +81,7 @@ def speech_regions(samples: np.ndarray, sample_rate: int) -> tuple[tuple[int, in
     active = rms >= threshold
 
     # Bridge gaps shorter than 180 ms so "Hey Pangu" remains one region.
-    max_gap = max(1, int(round(0.18 / 0.010)))
+    max_gap = max(1, round(0.18 / 0.010))
     active_indices = np.flatnonzero(active)
     if active_indices.size:
         for left, right in zip(active_indices[:-1], active_indices[1:], strict=False):
@@ -240,7 +240,9 @@ class PersonalizedWakeWordVerifier:
             raise ValueError("speaker embedding is required")
         templates = tuple(np.asarray(item, dtype=np.float32) for item in raw_templates)
         feature_dim = templates[0].shape[1] if templates[0].ndim == 2 else 0
-        if feature_dim <= 0 or any(item.ndim != 2 or item.shape[1] != feature_dim for item in templates):
+        if feature_dim <= 0 or any(
+            item.ndim != 2 or item.shape[1] != feature_dim for item in templates
+        ):
             raise ValueError("wake templates are malformed")
         self._templates = templates
         self._profile = data
@@ -267,7 +269,10 @@ class PersonalizedWakeWordVerifier:
                 continue
             features = acoustic_features(candidate, sample_rate)
             template_scores = sorted(
-                (distance_to_score(dtw_distance(features, template)) for template in self._templates),
+                (
+                    distance_to_score(dtw_distance(features, template))
+                    for template in self._templates
+                ),
                 reverse=True,
             )
             # Require agreement from more than one enrollment example to reject accidental matches.
@@ -277,7 +282,9 @@ class PersonalizedWakeWordVerifier:
             try:
                 candidate_embedding = normalize_embedding(
                     np.asarray(
-                        self._speaker_provider.extract(tuple(float(x) for x in candidate), sample_rate),
+                        self._speaker_provider.extract(
+                            tuple(float(x) for x in candidate), sample_rate
+                        ),
                         dtype=np.float32,
                     )
                 )
