@@ -161,8 +161,15 @@ class ResilientLoadManager(Generic[T]):
         self.retry = retry or RetryPolicy()
         self._lock = asyncio.Lock()
 
-    def _select(self) -> EndpointStats:
-        candidates = [item for item in self.endpoints.values() if item.breaker.allow()]
+    def _select(self, excluded: set[str] | None = None) -> EndpointStats:
+        excluded_names = excluded or set()
+        candidates = [
+            item
+            for item in self.endpoints.values()
+            if item.name not in excluded_names and item.breaker.allow()
+        ]
+        if not candidates and excluded_names:
+            candidates = [item for item in self.endpoints.values() if item.breaker.allow()]
         if not candidates:
             raise CircuitOpenError("all service endpoints have open circuit breakers")
         # Weighted least-load with latency as a deterministic tie-breaker.
@@ -199,8 +206,10 @@ class ResilientLoadManager(Generic[T]):
         await self._admit()
         try:
             last_error: BaseException | None = None
+            attempted: set[str] = set()
             for attempt in range(self.retry.attempts):
-                endpoint = self._select()
+                endpoint = self._select(attempted)
+                attempted.add(endpoint.name)
                 endpoint.in_flight += 1
                 started = time.monotonic()
                 try:
