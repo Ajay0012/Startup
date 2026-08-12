@@ -16,6 +16,8 @@ from pangu.database import (
     DatabaseService,
 )
 
+CURRENT_HEAD = "0008_reconcile_persistent_intelligence"
+
 REQUIRED_TABLES = {
     "commands",
     "events",
@@ -48,7 +50,7 @@ def test_empty_database_migrates_to_head_with_sqlite_guards(tmp_path: Path) -> N
         with database._engine.connect() as connection:
             assert (
                 connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
-                == "0005_persistent_intelligence"
+                == CURRENT_HEAD
             )
     finally:
         database.stop()
@@ -77,7 +79,7 @@ def test_existing_0003_database_upgrades_to_current_head(tmp_path: Path) -> None
     upgraded = DatabaseService(path)
     upgraded.start()
     try:
-        assert upgraded.health_details()["migration_revision"] == "0005_persistent_intelligence"
+        assert upgraded.health_details()["migration_revision"] == CURRENT_HEAD
     finally:
         upgraded.stop()
 
