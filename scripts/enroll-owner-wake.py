@@ -60,7 +60,7 @@ def main() -> int:
         / "models"
         / "voice"
         / "speaker"
-        / "3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx"
+        / "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
     )
     if not speaker_model.is_file():
         raise SystemExit(
