@@ -69,9 +69,17 @@ async def run_command(args: argparse.Namespace) -> int:
     """Run the complete CLI lifecycle on one event loop."""
     container = RuntimeBuilder(resolve_application_root()).build()
     runtime = container.runtime
+    standalone_capture = args.command == "voice" and args.text == "capture-test"
+    file_action = args.command == "voice" and args.text == "vad-file-test"
+    event_bus_started_for_capture = False
     try:
-        file_action = args.command == "voice" and args.text == "vad-file-test"
-        if not file_action:
+        if standalone_capture:
+            # capture_test owns its microphone stream and worker. Starting the full runtime here
+            # would also start the realtime voice coordinator, causing two concurrent microphone
+            # streams to feed the same voice runtime and doubling captured audio.
+            await container.events.start()
+            event_bus_started_for_capture = True
+        elif not file_action:
             await runtime.start_async()
         text = args.text or ""
         exit_code = 0
@@ -302,6 +310,8 @@ async def run_command(args: argparse.Namespace) -> int:
         try:
             await container.gemini_provider.close()
         finally:
+            if event_bus_started_for_capture:
+                await container.events.stop()
             await runtime.stop_async()
 
 
