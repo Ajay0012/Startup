@@ -110,6 +110,15 @@ class SherpaKeywordSpotterWakeWordEngine:
         return self._personalized
 
     def health(self) -> WakeWordHealth:
+        missing = tuple(path.name for path in self.required_files if not path.is_file())
+        if missing:
+            return WakeWordHealth(
+                "UNAVAILABLE",
+                "sherpa-onnx-kws",
+                self.config.model_root.name,
+                missing,
+                "WAKE_MODEL_UNAVAILABLE",
+            )
         if self.personalized_enabled:
             personalized = self._personalized_verifier().health()
             if personalized.available:
@@ -125,15 +134,6 @@ class SherpaKeywordSpotterWakeWordEngine:
                     Path(personalized.profile_path).name,
                     normalized_error=personalized.normalized_error,
                 )
-        missing = tuple(path.name for path in self.required_files if not path.is_file())
-        if missing:
-            return WakeWordHealth(
-                "UNAVAILABLE",
-                "sherpa-onnx-kws",
-                self.config.model_root.name,
-                missing,
-                "WAKE_MODEL_UNAVAILABLE",
-            )
         return WakeWordHealth(
             "AVAILABLE" if self._spotter is not None else "READY_TO_LOAD",
             "sherpa-onnx-kws",
@@ -213,13 +213,14 @@ class SherpaKeywordSpotterWakeWordEngine:
             return None
         self._last_detection = now
         self._last_error = None
+        combined_score = min(match.score, match.speaker_similarity)
         return WakeDetection(
             keyword="HEY_PANGU",
             normalized_keyword="HEY PANGU",
             start_timestamp=frames[0].timestamp,
             detection_timestamp=frames[-1].timestamp,
-            score=min(match.score, match.speaker_similarity),
-            threshold=1.0,
+            score=combined_score,
+            threshold=combined_score,
             engine_name="pangu-personalized-owner-wake-v1",
             audio_session_id=session_id,
         )
@@ -296,7 +297,7 @@ def load_wake_word_config(root: Path, cooldown_seconds: float = 2.0) -> WakeWord
             / "models"
             / "voice"
             / "speaker"
-            / "3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx"
+            / "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
         ),
         owner_only=True,
     )
