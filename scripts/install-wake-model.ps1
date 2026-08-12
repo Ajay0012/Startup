@@ -14,7 +14,7 @@ if ([string]::IsNullOrWhiteSpace($ExpectedSha256) -or $ExpectedSha256 -notmatch 
 }
 
 if ((Test-Path $target) -and -not $Force) {
-    $required = @('encoder.onnx','decoder.onnx','joiner.onnx','tokens.txt','keywords.txt')
+    $required = @('encoder.onnx','decoder.onnx','joiner.onnx','tokens.txt','keywords.txt','manifest.json')
     $complete = $true
     foreach ($item in $required) { if (-not (Test-Path (Join-Path $target $item))) { $complete = $false } }
     if ($complete) { Write-Output 'ALREADY_INSTALLED'; exit 0 }
@@ -42,13 +42,17 @@ try {
     Copy-Item (Join-Path $source.FullName 'en.phone') (Join-Path $target 'en.phone') -Force
 
     Add-Content -LiteralPath (Join-Path $target 'en.phone') -Value "`nPANGU P AE1 NG G UW0`nPANGUU P AE1 NG G UW0`nPANGOO P AE1 NG G UW0"
-    @'
+    $keywordsRaw = @'
 HEY PANGU :2.0 #0.28 @HEY_PANGU
 PANGU :1.6 #0.32 @PANGU
 HAY PANGU :1.4 #0.35 @HAY_PANGU
 HEY PANGUU :1.8 #0.30 @HEY_PANGUU
 HEY PANGOO :1.8 #0.30 @HEY_PANGOO
-'@ | Set-Content -LiteralPath (Join-Path $target 'keywords_raw.txt') -Encoding utf8
+'@
+    # Windows PowerShell 5.1 writes a UTF-8 BOM with `-Encoding utf8`. sherpa-onnx
+    # treats that BOM as part of the first keyword token, which makes text2token fail.
+    # The keyword definitions are ASCII-only, so write them without a BOM.
+    $keywordsRaw | Set-Content -LiteralPath (Join-Path $target 'keywords_raw.txt') -Encoding ascii
 
     $cli = Get-Command sherpa-onnx-cli -ErrorAction SilentlyContinue
     if (-not $cli) { throw 'SHERPA_ONNX_CLI_UNAVAILABLE: install the project dependencies first.' }
@@ -73,7 +77,7 @@ HEY PANGOO :1.8 #0.30 @HEY_PANGOO
     foreach ($name in @('encoder.onnx','decoder.onnx','joiner.onnx','tokens.txt','keywords.txt','en.phone')) {
         $manifest.artifacts[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $target $name)).Hash.ToLowerInvariant()
     }
-    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $target 'manifest.json') -Encoding utf8
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $target 'manifest.json') -Encoding ascii
     Write-Output 'INSTALLED'
 }
 finally {
