@@ -26,7 +26,7 @@ class BenchmarkArtifact:
     def load(cls, path: Path) -> BenchmarkArtifact:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
-            raise ValueError("benchmark artifact must be an object")
+            raise TypeError("benchmark artifact must be an object")
         revision = str(payload.get("revision", "")).strip()
         label = str(payload.get("label", "pangu")).strip() or "pangu"
         values = payload.get("metrics")
@@ -35,7 +35,7 @@ class BenchmarkArtifact:
         parsed: dict[str, float] = {}
         for key, value in values.items():
             if isinstance(value, bool) or not isinstance(value, int | float):
-                raise ValueError(f"benchmark metric {key} must be numeric")
+                raise TypeError(f"benchmark metric {key} must be numeric")
             parsed[str(key)] = float(value)
         return cls(revision, label, parsed)
 
@@ -118,7 +118,7 @@ class BenchmarkVerifiedPromoter:
         try:
             baseline = BenchmarkArtifact.load(baseline_path)
             candidate = BenchmarkArtifact.load(candidate_path)
-        except (OSError, ValueError, json.JSONDecodeError):
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return PromotionResult(False, None, normalized_error="BENCHMARK_ARTIFACT_INVALID")
         if baseline.revision != expected_base_sha:
             return PromotionResult(False, None, normalized_error="BASELINE_REVISION_MISMATCH")
