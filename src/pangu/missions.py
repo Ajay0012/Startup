@@ -147,6 +147,9 @@ class PersistentMissionRuntime:
                     updated_at=now,
                 )
             )
+            # SQLite foreign-key enforcement is enabled. Flush the parent row before
+            # adding task/checkpoint rows so SQLAlchemy cannot emit dependents first.
+            session.flush()
             for ordinal, item in enumerate(tasks):
                 session.add(
                     MissionTaskRow(
