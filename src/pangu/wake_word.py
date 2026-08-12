@@ -9,6 +9,9 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
+import numpy as np
+
+from .personalized_wake import PersonalizedWakeWordVerifier
 from .voice import AudioFrame, WakeDetection
 
 
@@ -32,6 +35,9 @@ class WakeWordConfig:
         "HEY_PANGUU",
         "HEY_PANGOO",
     )
+    personalized_profile: Path | None = None
+    speaker_model: Path | None = None
+    owner_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -44,17 +50,21 @@ class WakeWordHealth:
 
 
 class SherpaKeywordSpotterWakeWordEngine:
-    """Local, fail-closed sherpa-onnx keyword spotter for PANGU.
+    """Local owner-personalized wake detector with sherpa KWS compatibility fallback.
 
-    The detector is deliberately binary at this boundary: sherpa-onnx owns the
-    keyword trigger threshold inside the generated keywords file. PANGU then
-    applies its own energy floor, accepted-label allowlist, cooldown and TTS
-    suppression before emitting a wake detection.
+    Production configuration enables the personalized path. A wake then requires two
+    independent local checks: the enrolled acoustic pronunciation template must match
+    "Hey Pangu", and the sherpa speaker embedding must match the enrolled owner voice.
+    Raw enrollment audio is never required at runtime and is not persisted by PANGU.
+
+    Direct unit/test configurations that do not provide personalized paths retain the
+    original sherpa open-vocabulary keyword spotter behavior.
     """
 
     def __init__(self, config: WakeWordConfig) -> None:
         self.config = config
         self._spotter: Any | None = None
+        self._personalized: PersonalizedWakeWordVerifier | None = None
         self._last_detection = float("-inf")
         self._suppressed_until = float("-inf")
         self._last_error: str | None = None
@@ -81,7 +91,38 @@ class SherpaKeywordSpotterWakeWordEngine:
             self.config.keywords_file,
         )
 
+    @property
+    def personalized_enabled(self) -> bool:
+        return self.config.personalized_profile is not None and self.config.speaker_model is not None
+
+    def _personalized_verifier(self) -> PersonalizedWakeWordVerifier:
+        if not self.personalized_enabled:
+            raise RuntimeError("PERSONALIZED_WAKE_NOT_CONFIGURED")
+        if self._personalized is None:
+            assert self.config.personalized_profile is not None
+            assert self.config.speaker_model is not None
+            self._personalized = PersonalizedWakeWordVerifier(
+                self.config.personalized_profile,
+                self.config.speaker_model,
+            )
+        return self._personalized
+
     def health(self) -> WakeWordHealth:
+        if self.personalized_enabled:
+            personalized = self._personalized_verifier().health()
+            if personalized.available:
+                return WakeWordHealth(
+                    "AVAILABLE",
+                    "personalized-acoustic+speaker-verification",
+                    Path(personalized.profile_path).name,
+                )
+            if self.config.owner_only:
+                return WakeWordHealth(
+                    "UNAVAILABLE",
+                    "personalized-acoustic+speaker-verification",
+                    Path(personalized.profile_path).name,
+                    normalized_error=personalized.normalized_error,
+                )
         missing = tuple(path.name for path in self.required_files if not path.is_file())
         if missing:
             return WakeWordHealth(
@@ -101,8 +142,8 @@ class SherpaKeywordSpotterWakeWordEngine:
     def _load(self) -> None:
         if self._spotter is not None:
             return
-        health = self.health()
-        if health.missing_files:
+        missing = tuple(path.name for path in self.required_files if not path.is_file())
+        if missing:
             self._last_error = "WAKE_MODEL_UNAVAILABLE"
             raise RuntimeError(self._last_error)
         try:
@@ -135,6 +176,7 @@ class SherpaKeywordSpotterWakeWordEngine:
 
     def close(self) -> None:
         self._spotter = None
+        self._personalized = None
 
     def _window_is_eligible(self, frames: tuple[AudioFrame, ...]) -> bool:
         if not frames:
@@ -147,6 +189,39 @@ class SherpaKeywordSpotterWakeWordEngine:
         energy = (sum(sample * sample for sample in samples) / len(samples)) ** 0.5
         return energy >= self.config.minimum_energy
 
+    def _personalized_detect(
+        self, frames: tuple[AudioFrame, ...], session_id: str, now: float
+    ) -> WakeDetection | None:
+        verifier = self._personalized_verifier()
+        health = verifier.health()
+        if not health.available:
+            self._last_error = health.normalized_error
+            if self.config.owner_only:
+                raise RuntimeError(health.normalized_error or "PERSONALIZED_WAKE_UNAVAILABLE")
+            return None
+        samples = np.asarray(
+            [sample for frame in frames for sample in frame.samples],
+            dtype=np.float32,
+        )
+        limit = int(16000 * self.config.maximum_window_seconds)
+        if samples.size > limit:
+            samples = samples[-limit:]
+        match = verifier.verify(samples, 16000)
+        if match is None:
+            return None
+        self._last_detection = now
+        self._last_error = None
+        return WakeDetection(
+            keyword="HEY_PANGU",
+            normalized_keyword="HEY PANGU",
+            start_timestamp=frames[0].timestamp,
+            detection_timestamp=frames[-1].timestamp,
+            score=min(match.score, match.speaker_similarity),
+            threshold=1.0,
+            engine_name="pangu-personalized-owner-wake-v1",
+            audio_session_id=session_id,
+        )
+
     def detect(self, frames: tuple[AudioFrame, ...], session_id: str) -> WakeDetection | None:
         now = monotonic()
         if now < self._suppressed_until:
@@ -156,6 +231,11 @@ class SherpaKeywordSpotterWakeWordEngine:
         if not self._window_is_eligible(frames):
             return None
 
+        if self.personalized_enabled:
+            personalized = self._personalized_detect(frames, session_id, now)
+            if personalized is not None or self.config.owner_only:
+                return personalized
+
         self._load()
         assert self._spotter is not None
         samples = [sample for frame in frames for sample in frame.samples]
@@ -164,8 +244,6 @@ class SherpaKeywordSpotterWakeWordEngine:
         try:
             stream = self._spotter.create_stream()
             stream.accept_waveform(16000, samples)
-            # A short zero tail allows the streaming decoder to flush a phrase
-            # that ends at the edge of the ring-buffer window.
             stream.accept_waveform(16000, [0.0] * int(0.24 * 16000))
             stream.input_finished()
             result = ""
@@ -210,6 +288,15 @@ def load_wake_word_config(root: Path, cooldown_seconds: float = 2.0) -> WakeWord
         tokens=model_root / "tokens.txt",
         keywords_file=model_root / "keywords.txt",
         cooldown_seconds=cooldown_seconds,
+        personalized_profile=root / "runtime-data" / "identity" / "owner_wake_profile.json",
+        speaker_model=(
+            root
+            / "models"
+            / "voice"
+            / "speaker"
+            / "3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx"
+        ),
+        owner_only=True,
     )
 
 
