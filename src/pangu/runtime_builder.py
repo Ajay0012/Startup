@@ -53,6 +53,7 @@ from .streaming_model import StreamingGeminiProvider, StreamingGoogleGenAITransp
 from .system_awareness import SystemAwarenessRuntime
 from .system_control import SystemControlAdapter, SystemControlRuntime, WindowsSystemControlAdapter
 from .tts import WindowsSapiSpeechProvider
+from .vad_stream import StreamingVadFrameAdapter
 from .voice import VadActivationService, VoiceSessionRuntime, WindowsAudioInputAdapter
 from .voice_providers import FasterWhisperTranscriptionProvider
 from .wake_word import SherpaKeywordSpotterWakeWordEngine, load_wake_word_config
@@ -290,7 +291,8 @@ class RuntimeBuilder:
             / "v4"
             / "manifest.json"
         )
-        vad = VadActivationService(self._root / "models", manifest_path).activate()
+        native_vad = VadActivationService(self._root / "models", manifest_path).activate()
+        vad = StreamingVadFrameAdapter(native_vad)
         transcriber = FasterWhisperTranscriptionProvider(
             self._root / "models" / "voice" / "whisper"
         )
