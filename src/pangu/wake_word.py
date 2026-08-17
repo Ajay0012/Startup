@@ -181,15 +181,41 @@ class SherpaKeywordSpotterWakeWordEngine:
         self._personalized = None
 
     def _window_is_eligible(self, frames: tuple[AudioFrame, ...]) -> bool:
+        """Admit a wake window when sustained speech energy exists.
+
+        Using RMS across the complete three-second rolling window diluted a natural
+        sub-second "Hey Pangu" with surrounding silence. On quiet laptop microphones
+        that could keep the aggregate below the energy gate even though the phrase
+        itself was clearly audible. Evaluate frame-local RMS instead and require at
+        least 120 ms of energetic audio so a click or single transient cannot open the
+        expensive wake verifier.
+        """
         if not frames:
             return False
-        samples = [sample for frame in frames for sample in frame.samples]
-        if not samples:
+        maximum_samples = int(16000 * self.config.maximum_window_seconds)
+        retained: list[AudioFrame] = []
+        retained_samples = 0
+        for frame in reversed(frames):
+            if not frame.samples:
+                continue
+            retained.append(frame)
+            retained_samples += len(frame.samples)
+            if retained_samples >= maximum_samples:
+                break
+        if not retained:
             return False
-        if len(samples) > int(16000 * self.config.maximum_window_seconds):
-            samples = samples[-int(16000 * self.config.maximum_window_seconds) :]
-        energy = (sum(sample * sample for sample in samples) / len(samples)) ** 0.5
-        return energy >= self.config.minimum_energy
+
+        energetic_samples = 0
+        for frame in retained:
+            values = np.asarray(frame.samples, dtype=np.float32)
+            if values.size == 0:
+                continue
+            rms = float(np.sqrt(np.mean(np.square(values))))
+            if rms >= self.config.minimum_energy:
+                energetic_samples += int(values.size)
+
+        minimum_active_samples = int(0.12 * 16000)
+        return energetic_samples >= minimum_active_samples
 
     def _personalized_detect(
         self, frames: tuple[AudioFrame, ...], session_id: str, now: float
