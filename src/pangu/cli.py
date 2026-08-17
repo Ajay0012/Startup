@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "command",
         choices=(
+            "run",
             "health",
             "models",
             "model-health",
@@ -83,6 +84,26 @@ async def run_command(args: argparse.Namespace) -> int:
             await runtime.start_async()
         text = args.text or ""
         exit_code = 0
+        if args.command == "run":
+            if container.realtime_voice is None:
+                raise RuntimeError("production realtime voice coordinator unavailable")
+            diagnostics = runtime.voice.diagnostics()
+            print(
+                json.dumps(
+                    {
+                        "state": "RUNNING",
+                        "voice_state": diagnostics.current_state,
+                        "audio_backend": diagnostics.audio_backend,
+                        "microphone": diagnostics.default_device_selector,
+                        "realtime_voice": True,
+                        "message": "PANGU is listening for the owner wake phrase. Press Ctrl+C to stop.",
+                    },
+                    default=str,
+                ),
+                flush=True,
+            )
+            await asyncio.Event().wait()
+            return 0
         if args.command == "health":
             result: object = runtime.db.health_details()
         elif args.command == "models":
