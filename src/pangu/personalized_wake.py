@@ -108,6 +108,30 @@ def speech_regions(samples: np.ndarray, sample_rate: int) -> tuple[tuple[int, in
     return tuple(regions)
 
 
+def expand_context_window(
+    start: int,
+    end: int,
+    total_samples: int,
+    sample_rate: int,
+    *,
+    minimum_seconds: float = 1.25,
+) -> tuple[int, int]:
+    """Expand a detected phrase without changing the exact keyword-matching region.
+
+    Speaker embedding models need more acoustic context than a short wake phrase may
+    contain. Expansion is bounded to the in-memory wake buffer and is used only for
+    speaker verification; keyword matching still uses the original detected region.
+    """
+    minimum_samples = max(1, round(minimum_seconds * sample_rate))
+    if end - start >= minimum_samples:
+        return start, end
+    center = (start + end) // 2
+    expanded_start = max(0, center - minimum_samples // 2)
+    expanded_end = min(total_samples, expanded_start + minimum_samples)
+    expanded_start = max(0, expanded_end - minimum_samples)
+    return expanded_start, expanded_end
+
+
 def acoustic_features(samples: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
     """Noise-robust log-mel + delta representation for personalized phrase matching."""
     waveform = np.asarray(samples, dtype=np.float32).reshape(-1)
@@ -279,11 +303,19 @@ class PersonalizedWakeWordVerifier:
             keyword_score = float(np.mean(template_scores[: min(3, len(template_scores))]))
             if keyword_score < keyword_threshold:
                 continue
+            speaker_start, speaker_end = expand_context_window(
+                start,
+                end,
+                waveform.size,
+                sample_rate,
+                minimum_seconds=1.25,
+            )
+            speaker_candidate = waveform[speaker_start:speaker_end]
             try:
                 candidate_embedding = normalize_embedding(
                     np.asarray(
                         self._speaker_provider.extract(
-                            tuple(float(x) for x in candidate), sample_rate
+                            tuple(float(x) for x in speaker_candidate), sample_rate
                         ),
                         dtype=np.float32,
                     )
