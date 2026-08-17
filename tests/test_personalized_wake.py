@@ -9,6 +9,7 @@ from pangu.personalized_wake import (
     build_profile_payload,
     distance_to_score,
     dtw_distance,
+    expand_context_window,
     speech_regions,
 )
 
@@ -39,6 +40,34 @@ def test_speech_regions_find_phrase_but_reject_silence() -> None:
     start, end = regions[0]
     assert start < end
     assert 0.45 <= (end - start) / 16000 <= 3.2
+
+
+def test_short_phrase_expands_only_for_speaker_context() -> None:
+    sample_rate = 16000
+    start = 12000
+    end = 26640
+    expanded_start, expanded_end = expand_context_window(
+        start,
+        end,
+        5 * sample_rate,
+        sample_rate,
+    )
+    assert end - start < sample_rate
+    assert expanded_end - expanded_start == int(1.25 * sample_rate)
+    assert expanded_start <= start
+    assert expanded_end >= end
+
+
+def test_context_expansion_is_bounded_at_buffer_edges() -> None:
+    sample_rate = 16000
+    expanded_start, expanded_end = expand_context_window(
+        0,
+        12000,
+        sample_rate,
+        sample_rate,
+    )
+    assert expanded_start == 0
+    assert expanded_end == sample_rate
 
 
 def test_dtw_prefers_same_pronunciation_over_different_signal() -> None:
