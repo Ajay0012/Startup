@@ -282,11 +282,13 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
         transcript_to_result_ms = 0.0
         result_to_speech_ms = 0.0
         conversational_turns = 0
+        stage = "capture"
         try:
             for followup in range(self.barge_in.maximum_followups + 1):
                 if self.voice.state != VoiceState.COMMAND_LISTENING:
                     return
                 conversational_turns += 1
+                stage = "capture"
                 await self.events.publish(
                     EventEnvelope(
                         "voice.command.capture.started",
@@ -301,6 +303,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                 if segment is None:
                     self.failed_turns += 1
                     await self.voice.finish_turn("NO_COMMAND_SPEECH")
+                    stage = "tts_no_command"
                     barge_sequence = await self._speak_with_barge_in("I didn't catch that.")
                     if barge_sequence is not None and followup < self.barge_in.maximum_followups:
                         await self.voice.begin_barge_in()
@@ -310,8 +313,10 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                     await self.voice.return_to_wake()
                     return
 
+                stage = "transcription_begin"
                 await self.voice.begin_transcription()
                 speech_ended = monotonic()
+                stage = "transcription"
                 transcription = await asyncio.to_thread(
                     self.voice.transcriber.transcribe,
                     (AudioFrame(tuple(segment.samples), segment.start_timestamp, 1),),
@@ -332,6 +337,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                         )
                     )
                     await self.voice.mark_command_ready()
+                    stage = "tts_transcription_failure"
                     barge_sequence = await self._speak_with_barge_in(
                         "I couldn't understand that clearly."
                     )
@@ -356,6 +362,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                         },
                     )
                 )
+                stage = "conversation_classification"
                 act = await self.classify_conversational_utterance(text)
 
                 if act == ConversationAct.CANCEL:
@@ -375,6 +382,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
 
                 if act == ConversationAct.INCOMPLETE:
                     await self.voice.mark_command_ready()
+                    stage = "tts_incomplete"
                     await self._speak_with_barge_in("Go on.")
                     if followup < self.barge_in.maximum_followups:
                         await self.voice.begin_barge_in()
@@ -386,6 +394,7 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
 
                 if act == ConversationAct.CONTINUE and self._pending_response_chunks:
                     await self.voice.mark_command_ready()
+                    stage = "tts_continue"
                     barge_sequence = await self._continue_response()
                     if barge_sequence is not None and followup < self.barge_in.maximum_followups:
                         await self.voice.begin_barge_in()
@@ -395,11 +404,13 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                     await self.voice.return_to_wake()
                     return
 
+                stage = "runtime_command"
                 transcript_ready = monotonic()
                 result = await asyncio.to_thread(self.runtime.command, text, "voice")
                 transcript_to_result_ms = (monotonic() - transcript_ready) * 1000
                 await self.voice.mark_command_ready()
                 result_ready = monotonic()
+                stage = "tts_response"
                 barge_sequence = await self._speak_with_barge_in(result.message)
                 result_to_speech_ms = (monotonic() - result_ready) * 1000
                 if barge_sequence is not None and followup < self.barge_in.maximum_followups:
@@ -430,6 +441,18 @@ class AdvancedRealtimeVoiceTurnCoordinator(RealtimeVoiceTurnCoordinator):
                 return
         except asyncio.CancelledError:
             raise
-        except (RuntimeError, ValueError, OSError):
+        except (RuntimeError, ValueError, OSError) as error:
             self.failed_turns += 1
+            await self.events.publish(
+                EventEnvelope(
+                    "voice.turn.failure.detail",
+                    {
+                        "session_id": self.voice.session_id,
+                        "stage": stage,
+                        "exception_type": type(error).__name__,
+                        "message": str(error)[:200],
+                    },
+                    EventPriority.HIGH,
+                )
+            )
             await self.voice.fail_and_return_to_wake("ADVANCED_REALTIME_TURN_FAILED")
