@@ -16,6 +16,7 @@ class BrowserTargetSnapshot:
     verification_state: str
     normalized_error: str | None = None
     window_active: bool = False
+    active_target_id: str | None = None
 
 
 class ChromeSemanticTargetAdapter:
@@ -25,6 +26,10 @@ class ChromeSemanticTargetAdapter:
     tree into normalized targets for the spatial proposal layer. Coordinates are
     normalized against the Windows virtual desktop so they align with the HUD,
     including non-maximized windows and multi-monitor layouts.
+
+    The currently active Chrome tab is moved to the front of ``targets`` when it can
+    be inferred from the Chrome window title. That lets higher-level gesture code
+    bind a fist-grab to the active tab without requiring pixel-accurate pointing.
     """
 
     def __init__(self, *, title_contains: str = "Google Chrome", maximum_targets: int = 50) -> None:
@@ -85,6 +90,15 @@ class ChromeSemanticTargetAdapter:
             return _Rect(left, top, left + width, top + height)
         except (AttributeError, OSError, TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _active_tab_title(window_title: str | None) -> str:
+        if not window_title:
+            return ""
+        marker = " - Google Chrome"
+        if window_title.endswith(marker):
+            return window_title[: -len(marker)].strip()
+        return window_title.strip()
 
     def discover(self) -> BrowserTargetSnapshot:
         try:
@@ -160,6 +174,7 @@ class ChromeSemanticTargetAdapter:
             )
 
         targets: list[SemanticTarget] = []
+        names_by_id: dict[str, str] = {}
         for index, element in enumerate(descendants):
             if len(targets) >= self.maximum_targets:
                 break
@@ -178,20 +193,32 @@ class ChromeSemanticTargetAdapter:
                 getattr(getattr(element, "element_info", None), "automation_id", "") or ""
             )
             target_id = f"chrome:{handle or 0}:tab:{automation_id or index}:{name[:80]}"
-            targets.append(
-                SemanticTarget(
-                    target_id=target_id,
-                    kind="browser_tab",
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
-                    closable=True,
-                    destructive=False,
-                    unsaved=False,
-                    selection_count=1,
-                )
+            target = SemanticTarget(
+                target_id=target_id,
+                kind="browser_tab",
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                closable=True,
+                destructive=False,
+                unsaved=False,
+                selection_count=1,
             )
+            targets.append(target)
+            names_by_id[target_id] = name
+
+        active_target_id: str | None = None
+        active_title = self._active_tab_title(title).casefold()
+        if active_title:
+            for target in targets:
+                name = names_by_id.get(target.target_id, "").casefold()
+                if active_title == name or active_title in name or name in active_title:
+                    active_target_id = target.target_id
+                    break
+
+        if active_target_id is not None:
+            targets.sort(key=lambda item: item.target_id != active_target_id)
 
         return BrowserTargetSnapshot(
             "chrome",
@@ -201,4 +228,5 @@ class ChromeSemanticTargetAdapter:
             "VERIFIED",
             None,
             window_active=active,
+            active_target_id=active_target_id,
         )
