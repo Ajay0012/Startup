@@ -90,13 +90,12 @@ async def main() -> int:
     try:
         await runtime.start()
         print("PANGU LIVE SPATIAL DRY RUN")
-        print("- Chrome must be foreground for tab targeting")
-        print("- index fingertip continuously drives the HUD pointer")
-        print("- closed fist is GRAB; thumb/index pinch is SELECT")
-        print("- while grabbed, palm movement continuously drives DRAG")
-        print("- OPEN_PALM releases")
-        print("- target glow has a short grab grace period and acquisition halo")
-        print("- real tab closing is DISABLED")
+        print("- Chrome must be foreground")
+        print("- closed fist can AIR-GRAB the active Chrome tab; no pointing/selecting required")
+        print("- while grabbed, move the closed fist to build throw velocity")
+        print("- open the palm after a fast throw to produce a close proposal")
+        print("- pointer/hover remains optional for choosing a non-active target")
+        print("- real tab closing is DISABLED in this validation run")
         print(
             f"- pointer calibration x=({calibration.x_min:.3f},{calibration.x_max:.3f}) "
             f"y=({calibration.y_min:.3f},{calibration.y_max:.3f}) "
