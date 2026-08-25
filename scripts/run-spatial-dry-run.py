@@ -20,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--y-min", type=float)
     parser.add_argument("--y-max", type=float)
     parser.add_argument("--smoothing", type=float)
-    parser.add_argument("--target-padding", type=float, default=0.025)
+    parser.add_argument("--target-padding", type=float, default=0.04)
     return parser.parse_args()
 
 
@@ -29,7 +29,7 @@ def resolve_calibration(args: argparse.Namespace, root: Path) -> PointerCalibrat
     if path.is_file():
         calibration = PointerCalibration.load(path)
     else:
-        calibration = PointerCalibration(0.12, 0.88, 0.12, 0.88, True, 0.38)
+        calibration = PointerCalibration(0.12, 0.88, 0.12, 0.88, True, 0.58)
 
     return PointerCalibration(
         x_min=calibration.x_min if args.x_min is None else args.x_min,
@@ -60,7 +60,9 @@ async def main() -> int:
     if not model.is_file():
         raise SystemExit(f"hand model missing: {model}")
     if not overlay.is_file():
-        raise SystemExit("overlay build missing; run dotnet build apps/overlay-host/Pangu.OverlayHost.csproj -c Release")
+        raise SystemExit(
+            "overlay build missing; run dotnet build apps/overlay-host/Pangu.OverlayHost.csproj -c Release"
+        )
 
     state.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -89,10 +91,11 @@ async def main() -> int:
         await runtime.start()
         print("PANGU LIVE SPATIAL DRY RUN")
         print("- Chrome must be foreground for tab targeting")
-        print("- POINT moves the calibrated HUD pointer")
-        print("- stable GRAB uses a 2-frame hysteresis gate")
+        print("- index fingertip continuously drives the HUD pointer")
+        print("- closed fist is GRAB; thumb/index pinch is SELECT")
+        print("- while grabbed, palm movement continuously drives DRAG")
         print("- OPEN_PALM releases")
-        print("- tab hit-testing has a camera-friendly acquisition halo")
+        print("- target glow has a short grab grace period and acquisition halo")
         print("- real tab closing is DISABLED")
         print(
             f"- pointer calibration x=({calibration.x_min:.3f},{calibration.x_max:.3f}) "
