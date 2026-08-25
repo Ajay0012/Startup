@@ -15,13 +15,16 @@ class BrowserTargetSnapshot:
     targets: tuple[SemanticTarget, ...]
     verification_state: str
     normalized_error: str | None = None
+    window_active: bool = False
 
 
 class ChromeSemanticTargetAdapter:
     """Read-only Chrome UIA adapter that exposes visible tabs as semantic targets.
 
     The adapter never clicks or closes tabs. It only converts the accessibility
-    tree into normalized targets for the spatial proposal layer.
+    tree into normalized targets for the spatial proposal layer. Coordinates are
+    normalized against the Windows virtual desktop so they align with the HUD,
+    including non-maximized windows and multi-monitor layouts.
     """
 
     def __init__(self, *, title_contains: str = "Google Chrome", maximum_targets: int = 50) -> None:
@@ -38,14 +41,14 @@ class ChromeSemanticTargetAdapter:
             return fallback
 
     @staticmethod
-    def _normalized_rect(rect: Any, window_rect: Any) -> tuple[float, float, float, float] | None:
+    def _normalized_rect(rect: Any, reference_rect: Any) -> tuple[float, float, float, float] | None:
         try:
-            window_width = max(1, int(window_rect.right) - int(window_rect.left))
-            window_height = max(1, int(window_rect.bottom) - int(window_rect.top))
-            left = (int(rect.left) - int(window_rect.left)) / window_width
-            top = (int(rect.top) - int(window_rect.top)) / window_height
-            width = (int(rect.right) - int(rect.left)) / window_width
-            height = (int(rect.bottom) - int(rect.top)) / window_height
+            reference_width = max(1, int(reference_rect.right) - int(reference_rect.left))
+            reference_height = max(1, int(reference_rect.bottom) - int(reference_rect.top))
+            left = (int(rect.left) - int(reference_rect.left)) / reference_width
+            top = (int(rect.top) - int(reference_rect.top)) / reference_height
+            width = (int(rect.right) - int(rect.left)) / reference_width
+            height = (int(rect.bottom) - int(rect.top)) / reference_height
         except (AttributeError, TypeError, ValueError):
             return None
         if width <= 0 or height <= 0:
@@ -56,6 +59,30 @@ class ChromeSemanticTargetAdapter:
             min(1.0, max(0.0, width)),
             min(1.0, max(0.0, height)),
         )
+
+    @staticmethod
+    def _virtual_screen_rect() -> Any | None:
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            left = int(user32.GetSystemMetrics(76))  # SM_XVIRTUALSCREEN
+            top = int(user32.GetSystemMetrics(77))  # SM_YVIRTUALSCREEN
+            width = int(user32.GetSystemMetrics(78))  # SM_CXVIRTUALSCREEN
+            height = int(user32.GetSystemMetrics(79))  # SM_CYVIRTUALSCREEN
+            if width <= 0 or height <= 0:
+                return None
+
+            @dataclass(frozen=True)
+            class _Rect:
+                left: int
+                top: int
+                right: int
+                bottom: int
+
+            return _Rect(left, top, left + width, top + height)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return None
 
     def discover(self) -> BrowserTargetSnapshot:
         try:
@@ -114,6 +141,9 @@ class ChromeSemanticTargetAdapter:
                 "CHROME_WINDOW_BOUNDS_UNAVAILABLE",
             )
 
+        reference_rect = self._virtual_screen_rect() or window_rect
+        active = bool(self._safe(chrome.is_active, False))
+
         try:
             descendants = list(chrome.descendants())
         except Exception:  # noqa: BLE001
@@ -124,6 +154,7 @@ class ChromeSemanticTargetAdapter:
                 (),
                 "UNVERIFIED",
                 "CHROME_ACCESSIBILITY_TREE_FAILED",
+                window_active=active,
             )
 
         targets: list[SemanticTarget] = []
@@ -137,7 +168,7 @@ class ChromeSemanticTargetAdapter:
             if not visible or not enabled or not name or control_type.casefold() != "tabitem":
                 continue
             rect = self._safe(element.rectangle, None)
-            normalized = self._normalized_rect(rect, window_rect)
+            normalized = self._normalized_rect(rect, reference_rect)
             if normalized is None:
                 continue
             x, y, width, height = normalized
@@ -167,4 +198,5 @@ class ChromeSemanticTargetAdapter:
             tuple(targets),
             "VERIFIED",
             None,
+            window_active=active,
         )
