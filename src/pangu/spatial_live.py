@@ -30,7 +30,66 @@ class LiveSpatialDiagnostics:
     browser_targets: int
     detections: int
     proposals: int
+    hover_hits: int = 0
+    grab_begins: int = 0
+    last_action: str | None = None
     dry_run: bool = True
+
+
+class PointerMapper:
+    """Map camera-space fingertip coordinates into stable full-screen HUD coordinates.
+
+    The camera rarely uses its extreme image edges during natural pointing, so the
+    configurable active region is expanded to the full desktop. A small EMA removes
+    landmark jitter without turning the cursor into a delayed mouse substitute.
+    """
+
+    def __init__(
+        self,
+        *,
+        mirror_x: bool = True,
+        x_min: float = 0.12,
+        x_max: float = 0.88,
+        y_min: float = 0.12,
+        y_max: float = 0.88,
+        smoothing: float = 0.38,
+    ) -> None:
+        if not 0.0 <= x_min < x_max <= 1.0:
+            raise ValueError("x calibration must satisfy 0 <= min < max <= 1")
+        if not 0.0 <= y_min < y_max <= 1.0:
+            raise ValueError("y calibration must satisfy 0 <= min < max <= 1")
+        if not 0.0 < smoothing <= 1.0:
+            raise ValueError("smoothing must be in (0, 1]")
+        self.mirror_x = mirror_x
+        self.x_min = x_min
+        self.x_max = x_max
+        self.y_min = y_min
+        self.y_max = y_max
+        self.smoothing = smoothing
+        self._x: float | None = None
+        self._y: float | None = None
+
+    @staticmethod
+    def _clamp(value: float) -> float:
+        return min(1.0, max(0.0, value))
+
+    def map(self, x: float, y: float) -> tuple[float, float]:
+        mapped_x = self._clamp((x - self.x_min) / (self.x_max - self.x_min))
+        mapped_y = self._clamp((y - self.y_min) / (self.y_max - self.y_min))
+        if self.mirror_x:
+            mapped_x = 1.0 - mapped_x
+
+        if self._x is None or self._y is None:
+            self._x, self._y = mapped_x, mapped_y
+        else:
+            alpha = self.smoothing
+            self._x += alpha * (mapped_x - self._x)
+            self._y += alpha * (mapped_y - self._y)
+        return self._x, self._y
+
+    def reset(self) -> None:
+        self._x = None
+        self._y = None
 
 
 class GestureStabilizer:
@@ -43,7 +102,7 @@ class GestureStabilizer:
 
     _discrete = {GestureKind.GRAB, GestureKind.OPEN_PALM, GestureKind.PINCH}
 
-    def __init__(self, required_frames: int = 3) -> None:
+    def __init__(self, required_frames: int = 2) -> None:
         if not 1 <= required_frames <= 12:
             raise ValueError("required_frames must be between 1 and 12")
         self.required_frames = required_frames
@@ -79,17 +138,33 @@ class LiveSpatialDryRunRuntime:
         hud_state_path: Path,
         camera_index: int = 0,
         mirror_x: bool = True,
-        browser_refresh_seconds: float = 0.45,
+        pointer_x_min: float = 0.12,
+        pointer_x_max: float = 0.88,
+        pointer_y_min: float = 0.12,
+        pointer_y_max: float = 0.88,
+        pointer_smoothing: float = 0.38,
+        target_padding: float = 0.018,
+        browser_refresh_seconds: float = 1.5,
         poll_interval_seconds: float = 1 / 30,
     ) -> None:
+        if not 0.0 <= target_padding <= 0.08:
+            raise ValueError("target_padding must be between 0 and 0.08")
         self.events = EventBus(capacity=256)
         self.hud = HudStateBridge(self.events, hud_state_path, minimum_write_interval=0.04)
         self.tracker = MediaPipeHandTracker(model_path, camera_index=camera_index, max_hands=2)
         self.recognizer = TemporalGestureRecognizer()
-        self.stabilizer = GestureStabilizer()
+        self.stabilizer = GestureStabilizer(required_frames=2)
         self.browser = ChromeSemanticTargetAdapter()
         self.spatial = SpatialInteractionController()
-        self.mirror_x = mirror_x
+        self.pointer = PointerMapper(
+            mirror_x=mirror_x,
+            x_min=pointer_x_min,
+            x_max=pointer_x_max,
+            y_min=pointer_y_min,
+            y_max=pointer_y_max,
+            smoothing=pointer_smoothing,
+        )
+        self.target_padding = target_padding
         self.browser_refresh_seconds = browser_refresh_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self._targets: tuple[SemanticTarget, ...] = ()
@@ -98,6 +173,9 @@ class LiveSpatialDryRunRuntime:
         self._last_browser_refresh = 0.0
         self._detections = 0
         self._proposals = 0
+        self._hover_hits = 0
+        self._grab_begins = 0
+        self._last_action: str | None = None
         self._running = False
 
     def _screen_detection(self, detection: GestureDetection) -> GestureDetection:
@@ -106,8 +184,9 @@ class LiveSpatialDryRunRuntime:
         metadata = dict(detection.metadata)
         x = float(metadata.get("x", 0.0))
         y = float(metadata.get("y", 0.0))
-        metadata["x"] = 1.0 - x if self.mirror_x else x
-        metadata["y"] = y
+        mapped_x, mapped_y = self.pointer.map(x, y)
+        metadata["x"] = mapped_x
+        metadata["y"] = mapped_y
         return GestureDetection(
             detection.gesture,
             detection.confidence,
@@ -115,6 +194,37 @@ class LiveSpatialDryRunRuntime:
             detection.timestamp,
             metadata,
         )
+
+    def _interaction_targets(self) -> tuple[SemanticTarget, ...]:
+        """Use a modest dry-run acquisition halo while preserving original IDs.
+
+        The visual target remains exact. Only hit-testing is slightly expanded so a
+        camera fingertip does not need mouse-pixel precision to acquire a tab.
+        """
+        padding = self.target_padding
+        if padding <= 0.0:
+            return self._targets
+        expanded: list[SemanticTarget] = []
+        for target in self._targets:
+            x = max(0.0, target.x - padding)
+            y = max(0.0, target.y - padding)
+            right = min(1.0, target.x + target.width + padding)
+            bottom = min(1.0, target.y + target.height + padding)
+            expanded.append(
+                SemanticTarget(
+                    target_id=target.target_id,
+                    kind=target.kind,
+                    x=x,
+                    y=y,
+                    width=max(0.0, right - x),
+                    height=max(0.0, bottom - y),
+                    closable=target.closable,
+                    destructive=target.destructive,
+                    unsaved=target.unsaved,
+                    selection_count=target.selection_count,
+                )
+            )
+        return tuple(expanded)
 
     async def _refresh_browser_targets(self, *, force: bool = False) -> None:
         now = monotonic()
@@ -196,6 +306,7 @@ class LiveSpatialDryRunRuntime:
     async def stop(self) -> None:
         self._running = False
         self.tracker.stop()
+        self.pointer.reset()
         await self.hud.stop()
         await self.events.stop()
 
@@ -203,22 +314,27 @@ class LiveSpatialDryRunRuntime:
         await self._refresh_browser_targets()
         proposals: list[SpatialActionProposal] = []
         detections = self.recognizer.recognize(self.tracker.read())
+        interaction_targets = self._interaction_targets()
         for raw in detections:
             detection = self._screen_detection(raw)
             self._detections += 1
             await self._publish_detection(detection)
             if not self.stabilizer.accept(detection):
                 continue
-            proposal = self.spatial.propose(detection, self._targets)
+            proposal = self.spatial.propose(detection, interaction_targets)
             if proposal is None:
                 continue
             self._proposals += 1
+            self._last_action = proposal.action.value
+            if proposal.action == SpatialAction.HOVER_TARGET:
+                self._hover_hits += 1
+            elif proposal.action == SpatialAction.GRAB_BEGIN:
+                self._grab_begins += 1
             proposals.append(proposal)
             target = self._target_for(proposal)
             if target is not None:
                 await self._publish_target(target)
             elif proposal.action == SpatialAction.POINTER_MOVE:
-                # No target under the pointer: clear target by publishing a zero-confidence marker.
                 await self.events.publish(
                     EventEnvelope(
                         "spatial.target",
@@ -251,5 +367,8 @@ class LiveSpatialDryRunRuntime:
             browser_targets=len(self._targets),
             detections=self._detections,
             proposals=self._proposals,
+            hover_hits=self._hover_hits,
+            grab_begins=self._grab_begins,
+            last_action=self._last_action,
             dry_run=True,
         )
