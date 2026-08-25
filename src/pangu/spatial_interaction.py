@@ -199,17 +199,18 @@ class SpatialInteractionController:
             x = self.state.pointer_x if self.state.pointer_x is not None else 0.0
             y = self.state.pointer_y if self.state.pointer_y is not None else 0.0
             target = self._resolve_target(x, y, targets)
-            self.state.grabbed = True
-            self.state.grabbed_hand_id = hand_id
-            self.state.grabbed_target_id = target.target_id if target else None
-            self.state.trajectory.clear()
-            self._remember_pointer(detection.timestamp, x, y)
-            proposal = SpatialActionProposal(
-                SpatialAction.GRAB_BEGIN,
-                detection.hand_ids,
-                detection.confidence,
-                {"target_id": self.state.grabbed_target_id or "", "x": x, "y": y},
-            )
+            if target is not None:
+                self.state.grabbed = True
+                self.state.grabbed_hand_id = hand_id
+                self.state.grabbed_target_id = target.target_id
+                self.state.trajectory.clear()
+                self._remember_pointer(detection.timestamp, x, y)
+                proposal = SpatialActionProposal(
+                    SpatialAction.GRAB_BEGIN,
+                    detection.hand_ids,
+                    detection.confidence,
+                    {"target_id": target.target_id, "x": x, "y": y},
+                )
 
         elif gesture == GestureKind.OPEN_PALM and self.state.grabbed:
             x = self.state.pointer_x if self.state.pointer_x is not None else 0.0
