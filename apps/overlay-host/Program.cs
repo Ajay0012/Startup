@@ -69,6 +69,18 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
 internal sealed record HudCard(string Title, string Value, string? Detail = null);
 internal sealed record HudTarget(string Label, float X, float Y, float Width, float Height, float Confidence = 1f);
+internal sealed record HudPoint(float X, float Y);
+internal sealed record HudZone(string Label, float X, float Y, float Width, float Height, bool Active = false);
+internal sealed record HudSpatial(
+    HudPoint? Pointer,
+    HudPoint[] Trail,
+    string? Gesture,
+    bool Grabbed,
+    string? GrabbedTargetId,
+    string? Interaction,
+    bool ConfirmationRequired,
+    float ThrowSpeed,
+    HudZone? TrashZone);
 internal sealed record HudSnapshot(
     string Mode,
     string Status,
@@ -76,7 +88,8 @@ internal sealed record HudSnapshot(
     float AudioLevel,
     HudCard[] Cards,
     HudTarget? Target,
-    DateTimeOffset UpdatedAt)
+    DateTimeOffset UpdatedAt,
+    HudSpatial? Spatial = null)
 {
     public static HudSnapshot Ambient { get; } = new(
         "listening",
@@ -85,7 +98,8 @@ internal sealed record HudSnapshot(
         0.08f,
         Array.Empty<HudCard>(),
         null,
-        DateTimeOffset.UtcNow);
+        DateTimeOffset.UtcNow,
+        null);
 }
 
 internal sealed class HudStateProvider : IDisposable
@@ -99,7 +113,7 @@ internal sealed class HudStateProvider : IDisposable
     public HudStateProvider(string path)
     {
         _path = path;
-        _timer = new System.Threading.Timer(_ => Refresh(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
+        _timer = new System.Threading.Timer(_ => Refresh(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(100));
     }
 
     public HudSnapshot Current
@@ -126,7 +140,14 @@ internal sealed class HudStateProvider : IDisposable
             snapshot = snapshot with
             {
                 AudioLevel = Math.Clamp(snapshot.AudioLevel, 0f, 1f),
-                Cards = snapshot.Cards?.Take(6).ToArray() ?? Array.Empty<HudCard>()
+                Cards = snapshot.Cards?.Take(6).ToArray() ?? Array.Empty<HudCard>(),
+                Spatial = snapshot.Spatial is null
+                    ? null
+                    : snapshot.Spatial with
+                    {
+                        Trail = snapshot.Spatial.Trail?.TakeLast(18).ToArray() ?? Array.Empty<HudPoint>(),
+                        ThrowSpeed = Math.Max(0f, snapshot.Spatial.ThrowSpeed)
+                    }
             };
             lock (_gate)
             {
@@ -219,9 +240,10 @@ internal sealed class OverlayForm : Form
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
         var snapshot = _state.Current;
         var scale = DeviceDpi / 96f;
+        DrawSpatialLayer(g, snapshot.Spatial, scale);
         DrawCorePanel(g, snapshot, scale);
         DrawContextCards(g, snapshot, scale);
-        DrawGestureTarget(g, snapshot.Target, scale);
+        DrawGestureTarget(g, snapshot.Target, snapshot.Spatial, scale);
     }
 
     private void DrawCorePanel(Graphics g, HudSnapshot snapshot, float scale)
@@ -257,8 +279,12 @@ internal sealed class OverlayForm : Form
             var messageRect = new RectangleF(panel.Left + 98 * scale, panel.Top + 82 * scale, 302 * scale, 35 * scale);
             g.DrawString(snapshot.Message, smallFont, titleBrush, messageRect);
         }
+        var spatialLabel = snapshot.Spatial?.Interaction;
+        var footer = string.IsNullOrWhiteSpace(spatialLabel)
+            ? $"{snapshot.Mode.ToUpperInvariant()} · {DeviceDpi} DPI · {_scene.Renderer}"
+            : $"{spatialLabel} · {DeviceDpi} DPI · {_scene.Renderer}";
         g.DrawString(
-            $"{snapshot.Mode.ToUpperInvariant()} · {DeviceDpi} DPI · {_scene.Renderer}",
+            footer,
             smallFont,
             dimBrush,
             panel.Left + 98 * scale,
@@ -312,7 +338,92 @@ internal sealed class OverlayForm : Form
         }
     }
 
-    private void DrawGestureTarget(Graphics g, HudTarget? target, float scale)
+    private void DrawSpatialLayer(Graphics g, HudSpatial? spatial, float scale)
+    {
+        if (spatial is null)
+            return;
+
+        if (spatial.Trail is { Length: > 1 })
+        {
+            var points = spatial.Trail
+                .Select(point => new PointF(point.X * ClientSize.Width, point.Y * ClientSize.Height))
+                .ToArray();
+            for (var i = 1; i < points.Length; i++)
+            {
+                var alpha = 30 + (int)(150f * i / points.Length);
+                using var trailPen = new Pen(Color.FromArgb(alpha, 70, 225, 255), Math.Max(1f, 1.4f * scale));
+                g.DrawLine(trailPen, points[i - 1], points[i]);
+            }
+        }
+
+        var zone = spatial.TrashZone;
+        if (zone is not null && (zone.Active || spatial.Grabbed || spatial.Interaction == "THROW_TO_TRASH"))
+            DrawTrashZone(g, zone, spatial, scale);
+
+        if (spatial.Pointer is not null)
+            DrawHandPointer(g, spatial.Pointer, spatial, scale);
+    }
+
+    private void DrawHandPointer(Graphics g, HudPoint pointer, HudSpatial spatial, float scale)
+    {
+        var x = pointer.X * ClientSize.Width;
+        var y = pointer.Y * ClientSize.Height;
+        var pulse = 12f * scale + 3f * scale * (float)Math.Sin(_phase * Math.PI * 4);
+        var accent = spatial.Grabbed
+            ? Color.FromArgb(245, 255, 175, 70)
+            : Color.FromArgb(245, 85, 235, 255);
+        using var halo = new Pen(Color.FromArgb(130, accent.R, accent.G, accent.B), Math.Max(1f, 2f * scale));
+        using var core = new SolidBrush(accent);
+        g.DrawEllipse(halo, x - pulse, y - pulse, pulse * 2, pulse * 2);
+        g.FillEllipse(core, x - 3.5f * scale, y - 3.5f * scale, 7f * scale, 7f * scale);
+        using var font = new Font("Segoe UI Semibold", 9 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
+        using var brush = new SolidBrush(Color.FromArgb(230, 210, 248, 255));
+        var label = spatial.Grabbed ? "GRAB" : spatial.Gesture ?? "POINT";
+        g.DrawString(label, font, brush, x + 12 * scale, y + 7 * scale);
+    }
+
+    private void DrawTrashZone(Graphics g, HudZone zone, HudSpatial spatial, float scale)
+    {
+        var rect = new RectangleF(
+            zone.X * ClientSize.Width,
+            zone.Y * ClientSize.Height,
+            zone.Width * ClientSize.Width,
+            zone.Height * ClientSize.Height);
+        var hot = spatial.Interaction == "THROW_TO_TRASH" || spatial.ConfirmationRequired;
+        var pulse = 0.55f + 0.25f * (float)Math.Sin(_phase * Math.PI * 4);
+        var borderColor = hot
+            ? Color.FromArgb(235, 255, 110, 90)
+            : Color.FromArgb(220, 255, 170, 65);
+        using var path = RoundedRect(rect, 18 * scale);
+        using var fill = new SolidBrush(Color.FromArgb((int)(65 + 45 * pulse), 45, 20, 8));
+        using var border = new Pen(borderColor, Math.Max(1.5f, 2.2f * scale));
+        g.FillPath(fill, path);
+        g.DrawPath(border, path);
+
+        var cx = rect.Left + rect.Width / 2f;
+        var cy = rect.Top + rect.Height / 2f - 8 * scale;
+        var binWidth = Math.Min(rect.Width * 0.33f, 58 * scale);
+        var binHeight = Math.Min(rect.Height * 0.34f, 54 * scale);
+        var body = new RectangleF(cx - binWidth / 2f, cy - binHeight / 2f, binWidth, binHeight);
+        using var iconPen = new Pen(Color.FromArgb(235, 255, 210, 125), Math.Max(1.5f, 2f * scale));
+        g.DrawRectangle(iconPen, body.X, body.Y, body.Width, body.Height);
+        g.DrawLine(iconPen, body.Left - 5 * scale, body.Top - 7 * scale, body.Right + 5 * scale, body.Top - 7 * scale);
+        g.DrawLine(iconPen, cx - 9 * scale, body.Top - 12 * scale, cx + 9 * scale, body.Top - 12 * scale);
+
+        using var titleFont = new Font("Segoe UI Semibold", 11 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
+        using var detailFont = new Font("Segoe UI", 8.5f * scale, FontStyle.Regular, GraphicsUnit.Pixel);
+        using var titleBrush = new SolidBrush(Color.FromArgb(245, 255, 225, 165));
+        using var detailBrush = new SolidBrush(Color.FromArgb(210, 240, 188, 130));
+        g.DrawString("THROW TO CLOSE", titleFont, titleBrush, rect.Left + 14 * scale, rect.Bottom - 42 * scale);
+        var detail = spatial.ConfirmationRequired
+            ? "confirmation required"
+            : spatial.ThrowSpeed > 0f
+                ? $"velocity {spatial.ThrowSpeed:F2}"
+                : "release with intent";
+        g.DrawString(detail, detailFont, detailBrush, rect.Left + 14 * scale, rect.Bottom - 23 * scale);
+    }
+
+    private void DrawGestureTarget(Graphics g, HudTarget? target, HudSpatial? spatial, float scale)
     {
         if (target is null || target.Confidence < 0.45f)
             return;
@@ -321,11 +432,16 @@ internal sealed class OverlayForm : Form
         var width = Math.Max(30 * scale, target.Width * ClientSize.Width);
         var height = Math.Max(30 * scale, target.Height * ClientSize.Height);
         var rect = new RectangleF(x, y, width, height);
-        using var pen = new Pen(Color.FromArgb((int)(120 + target.Confidence * 120), 100, 235, 255), Math.Max(1f, 1.8f * scale));
+        var grabbed = spatial?.Grabbed == true;
+        var glow = grabbed ? Color.FromArgb(240, 255, 180, 70) : Color.FromArgb(235, 100, 235, 255);
+        using var pen = new Pen(Color.FromArgb((int)(120 + target.Confidence * 120), glow.R, glow.G, glow.B), Math.Max(1f, 1.8f * scale));
+        using var outerPen = new Pen(Color.FromArgb(80, glow.R, glow.G, glow.B), Math.Max(1f, 4.5f * scale));
         using var font = new Font("Segoe UI Semibold", 10 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
         using var brush = new SolidBrush(Color.FromArgb(235, 210, 248, 255));
+        g.DrawRectangle(outerPen, rect.X, rect.Y, rect.Width, rect.Height);
         g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
-        g.DrawString(target.Label, font, brush, rect.Left, Math.Max(0, rect.Top - 18 * scale));
+        var label = grabbed ? $"GRABBED · {target.Label}" : target.Label;
+        g.DrawString(label, font, brush, rect.Left, Math.Max(0, rect.Top - 18 * scale));
     }
 
     private static Color ModeColor(string? mode, int alpha)
