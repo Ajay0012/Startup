@@ -85,6 +85,20 @@ def test_grab_then_point_proposes_drag_for_same_semantic_target() -> None:
     assert controller.state.grabbed is True
 
 
+def test_fist_can_air_grab_first_preferred_target_without_hover() -> None:
+    controller = SpatialInteractionController()
+    active = target(target_id="active-tab")
+    other = target(target_id="other-tab", x=0.65)
+
+    grab = controller.propose(detection(GestureKind.GRAB, timestamp=1.0), (active, other))
+
+    assert grab is not None
+    assert grab.action == SpatialAction.GRAB_BEGIN
+    assert grab.parameters["target_id"] == "active-tab"
+    assert grab.parameters["air_grab"] is True
+    assert controller.state.grabbed_target_id == "active-tab"
+
+
 def test_fast_throw_into_trash_proposes_close_but_does_not_execute() -> None:
     controller = SpatialInteractionController(throw_velocity_threshold=0.5)
     item = target()
@@ -118,6 +132,25 @@ def test_fast_throw_into_trash_proposes_close_but_does_not_execute() -> None:
     assert proposal.requires_target_resolution is True
     assert proposal.requires_approval is False
     assert controller.state.grabbed is False
+
+
+def test_fast_throw_anywhere_proposes_close_without_trash_zone_hit() -> None:
+    controller = SpatialInteractionController(throw_velocity_threshold=0.5)
+    item = target(x=0.1, y=0.1)
+
+    controller.propose(detection(GestureKind.GRAB, timestamp=1.0), (item,))
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.35, "y": 0.25}, timestamp=1.12),
+        (item,),
+    )
+    proposal = controller.propose(
+        detection(GestureKind.OPEN_PALM, timestamp=1.16),
+        (item,),
+    )
+
+    assert proposal is not None
+    assert proposal.action == SpatialAction.THROW_TO_TRASH
+    assert proposal.parameters["throw_anywhere"] is True
 
 
 def test_unsaved_or_multi_target_throw_requires_approval() -> None:
