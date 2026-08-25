@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .advanced_pointing import AdvancedPointingEstimator
 from .gestures import GestureDetection, GestureKind, HandObservation
+from .spatial_interaction import SpatialAction, SpatialActionProposal
 from .spatial_live import GestureStabilizer, LiveSpatialDryRunRuntime
 
 
@@ -27,6 +28,7 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         ray_gain: float = 0.22,
         snap_radius: float = 0.035,
         snap_strength: float = 0.62,
+        throw_velocity_threshold: float = 0.22,
     ) -> None:
         super().__init__(
             model_path=model_path,
@@ -40,11 +42,14 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             pointer_smoothing=pointer_smoothing,
             target_padding=target_padding,
         )
+        if not 0.05 <= throw_velocity_threshold <= 2.0:
+            raise ValueError("throw_velocity_threshold must be between 0.05 and 2.0")
         self.advanced_pointer = AdvancedPointingEstimator(
             ray_gain=ray_gain,
             snap_radius=snap_radius,
             snap_strength=snap_strength,
         )
+        self.spatial.throw_velocity_threshold = throw_velocity_threshold
         # A fast throw often exposes the palm for only a few video frames. Accept
         # release immediately while keeping GRAB and PINCH guarded against flicker.
         self.stabilizer = GestureStabilizer(
@@ -52,15 +57,13 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             open_palm_frames=1,
             pinch_frames=5,
         )
+        self._throw_count = 0
+        self._release_count = 0
+        self._last_terminal_action: str | None = None
+        self._last_release_speed = 0.0
 
     def _manipulation_pose(self, hand: HandObservation) -> GestureDetection | None:
-        """More tolerant fist/open-palm recognizer for high-speed manipulation.
-
-        MediaPipe landmarks become noisy while the hand is moving quickly. Requiring
-        all four fingers to be perfectly extended can miss the release frame, so the
-        advanced runtime treats three-or-more clearly extended fingers as OPEN_PALM.
-        A compact hand with at most one extended finger remains GRAB.
-        """
+        """More tolerant fist/open-palm recognizer for high-speed manipulation."""
 
         points = hand.landmarks
         extended = (
@@ -132,6 +135,27 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             hand.timestamp,
             metadata,
         )
+
+    async def _handle_proposal(self, proposal: SpatialActionProposal) -> None:
+        await super()._handle_proposal(proposal)
+        if proposal.action == SpatialAction.THROW_TO_TRASH:
+            self._throw_count += 1
+            self._last_terminal_action = proposal.action.value
+            self._last_release_speed = float(proposal.parameters.get("speed", 0.0))
+        elif proposal.action == SpatialAction.RELEASE:
+            self._release_count += 1
+            self._last_terminal_action = proposal.action.value
+            self._last_release_speed = float(proposal.parameters.get("speed", 0.0))
+
+    def throw_diagnostics(self) -> dict[str, float | int | str | None]:
+        """Terminal manipulation diagnostics that are not overwritten by later pointer moves."""
+        return {
+            "throws": self._throw_count,
+            "releases": self._release_count,
+            "last_terminal_action": self._last_terminal_action,
+            "last_release_speed": round(self._last_release_speed, 4),
+            "throw_threshold": round(self.spatial.throw_velocity_threshold, 4),
+        }
 
     async def stop(self) -> None:
         self.advanced_pointer.reset()
