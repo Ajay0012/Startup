@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from pangu.spatial_calibration import PointerCalibration
 from pangu.spatial_live import LiveSpatialDryRunRuntime
 
 
@@ -14,13 +15,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--no-mirror-x", action="store_true")
-    parser.add_argument("--x-min", type=float, default=0.12)
-    parser.add_argument("--x-max", type=float, default=0.88)
-    parser.add_argument("--y-min", type=float, default=0.12)
-    parser.add_argument("--y-max", type=float, default=0.88)
-    parser.add_argument("--smoothing", type=float, default=0.38)
-    parser.add_argument("--target-padding", type=float, default=0.018)
+    parser.add_argument("--x-min", type=float)
+    parser.add_argument("--x-max", type=float)
+    parser.add_argument("--y-min", type=float)
+    parser.add_argument("--y-max", type=float)
+    parser.add_argument("--smoothing", type=float)
+    parser.add_argument("--target-padding", type=float, default=0.025)
     return parser.parse_args()
+
+
+def resolve_calibration(args: argparse.Namespace, root: Path) -> PointerCalibration:
+    path = root / "runtime-data" / "spatial" / "pointer_calibration.json"
+    if path.is_file():
+        calibration = PointerCalibration.load(path)
+    else:
+        calibration = PointerCalibration(0.12, 0.88, 0.12, 0.88, True, 0.38)
+
+    return PointerCalibration(
+        x_min=calibration.x_min if args.x_min is None else args.x_min,
+        x_max=calibration.x_max if args.x_max is None else args.x_max,
+        y_min=calibration.y_min if args.y_min is None else args.y_min,
+        y_max=calibration.y_max if args.y_max is None else args.y_max,
+        mirror_x=False if args.no_mirror_x else calibration.mirror_x,
+        smoothing=calibration.smoothing if args.smoothing is None else args.smoothing,
+    )
 
 
 async def main() -> int:
@@ -37,6 +55,7 @@ async def main() -> int:
         / "net10.0-windows"
         / "Pangu.OverlayHost.dll"
     )
+    calibration = resolve_calibration(args, root)
 
     if not model.is_file():
         raise SystemExit(f"hand model missing: {model}")
@@ -57,12 +76,12 @@ async def main() -> int:
         model_path=model,
         hud_state_path=state,
         camera_index=args.camera,
-        mirror_x=not args.no_mirror_x,
-        pointer_x_min=args.x_min,
-        pointer_x_max=args.x_max,
-        pointer_y_min=args.y_min,
-        pointer_y_max=args.y_max,
-        pointer_smoothing=args.smoothing,
+        mirror_x=calibration.mirror_x,
+        pointer_x_min=calibration.x_min,
+        pointer_x_max=calibration.x_max,
+        pointer_y_min=calibration.y_min,
+        pointer_y_max=calibration.y_max,
+        pointer_smoothing=calibration.smoothing,
         target_padding=args.target_padding,
     )
 
@@ -73,11 +92,12 @@ async def main() -> int:
         print("- POINT moves the calibrated HUD pointer")
         print("- stable GRAB uses a 2-frame hysteresis gate")
         print("- OPEN_PALM releases")
-        print("- tab hit-testing has a small camera-friendly acquisition halo")
+        print("- tab hit-testing has a camera-friendly acquisition halo")
         print("- real tab closing is DISABLED")
         print(
-            f"- pointer calibration x=({args.x_min:.2f},{args.x_max:.2f}) "
-            f"y=({args.y_min:.2f},{args.y_max:.2f}) smoothing={args.smoothing:.2f}"
+            f"- pointer calibration x=({calibration.x_min:.3f},{calibration.x_max:.3f}) "
+            f"y=({calibration.y_min:.3f},{calibration.y_max:.3f}) "
+            f"mirror_x={calibration.mirror_x} smoothing={calibration.smoothing:.2f}"
         )
         print()
         print("START:", runtime.diagnostics())
