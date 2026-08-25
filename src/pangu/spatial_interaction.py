@@ -122,7 +122,9 @@ class SpatialInteractionController:
         return vx, vy, hypot(vx, vy)
 
     @staticmethod
-    def _project(x: float, y: float, vx: float, vy: float, horizon: float = 0.18) -> tuple[float, float]:
+    def _project(
+        x: float, y: float, vx: float, vy: float, horizon: float = 0.18
+    ) -> tuple[float, float]:
         return x + vx * horizon, y + vy * horizon
 
     def _record(self, proposal: SpatialActionProposal | None) -> SpatialActionProposal | None:
@@ -145,7 +147,9 @@ class SpatialInteractionController:
             x = float(metadata.get("x", 0.0))
             y = float(metadata.get("y", 0.0))
             self._remember_pointer(detection.timestamp, x, y)
-            target = self._resolve_target(self.state.pointer_x or 0.0, self.state.pointer_y or 0.0, targets)
+            target = self._resolve_target(
+                self.state.pointer_x or 0.0, self.state.pointer_y or 0.0, targets
+            )
             if self.state.grabbed:
                 proposal = SpatialActionProposal(
                     SpatialAction.DRAG,
@@ -163,7 +167,11 @@ class SpatialInteractionController:
                     SpatialAction.HOVER_TARGET,
                     detection.hand_ids,
                     detection.confidence,
-                    {"x": self.state.pointer_x or 0.0, "y": self.state.pointer_y or 0.0, "target_id": target.target_id},
+                    {
+                        "x": self.state.pointer_x or 0.0,
+                        "y": self.state.pointer_y or 0.0,
+                        "target_id": target.target_id,
+                    },
                     requires_target_resolution=True,
                 )
             else:
@@ -206,7 +214,9 @@ class SpatialInteractionController:
         elif gesture == GestureKind.OPEN_PALM and self.state.grabbed:
             x = self.state.pointer_x if self.state.pointer_x is not None else 0.0
             y = self.state.pointer_y if self.state.pointer_y is not None else 0.0
-            target = next((item for item in targets if item.target_id == self.state.grabbed_target_id), None)
+            target = next(
+                (item for item in targets if item.target_id == self.state.grabbed_target_id), None
+            )
             vx, vy, speed = self._release_velocity()
             projected_x, projected_y = self._project(x, y, vx, vy)
             zone = trash_zone or TrashZone()
@@ -217,9 +227,7 @@ class SpatialInteractionController:
                 and (zone.contains(x, y) or zone.contains(projected_x, projected_y))
             )
             if throw_to_trash:
-                approval = bool(
-                    target.destructive or target.unsaved or target.selection_count > 1
-                )
+                approval = bool(target.destructive or target.unsaved or target.selection_count > 1)
                 proposal = SpatialActionProposal(
                     SpatialAction.THROW_TO_TRASH,
                     detection.hand_ids,
