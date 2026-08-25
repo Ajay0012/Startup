@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import exp, hypot, pi
+from math import hypot, pi
 from time import monotonic
 
 from .gestures import HandObservation
@@ -19,7 +19,9 @@ class PointingEstimate:
 class OneEuroAxis:
     """Low-lag adaptive filter for hand pointing coordinates."""
 
-    def __init__(self, *, min_cutoff: float = 1.6, beta: float = 0.045, d_cutoff: float = 1.0) -> None:
+    def __init__(
+        self, *, min_cutoff: float = 1.6, beta: float = 0.045, d_cutoff: float = 1.0
+    ) -> None:
         if min_cutoff <= 0 or d_cutoff <= 0 or beta < 0:
             raise ValueError("invalid One Euro filter parameters")
         self.min_cutoff = min_cutoff
@@ -96,7 +98,11 @@ class AdvancedPointingEstimator:
         points = hand.landmarks
         wrist = points[0]
         mcp, pip, dip, tip = points[5], points[6], points[7], points[8]
-        chain = hypot(pip.x - mcp.x, pip.y - mcp.y) + hypot(dip.x - pip.x, dip.y - pip.y) + hypot(tip.x - dip.x, tip.y - dip.y)
+        chain = (
+            hypot(pip.x - mcp.x, pip.y - mcp.y)
+            + hypot(dip.x - pip.x, dip.y - pip.y)
+            + hypot(tip.x - dip.x, tip.y - dip.y)
+        )
         direct = hypot(tip.x - mcp.x, tip.y - mcp.y)
         straightness = min(1.0, direct / max(chain, 1e-6))
         reach = min(1.0, hypot(tip.x - wrist.x, tip.y - wrist.y) / 0.42)
@@ -118,7 +124,9 @@ class AdvancedPointingEstimator:
             return 0.0, 0.0
         return dx / norm, dy / norm
 
-    def estimate(self, hand: HandObservation, *, timestamp: float | None = None) -> PointingEstimate | None:
+    def estimate(
+        self, hand: HandObservation, *, timestamp: float | None = None
+    ) -> PointingEstimate | None:
         extension = self._finger_extension_score(hand)
         confidence = min(1.0, hand.confidence * (0.55 + 0.45 * extension))
         if confidence < self.min_confidence:
@@ -135,7 +143,9 @@ class AdvancedPointingEstimator:
         y = self._y_filter.filter(raw_y, now)
         return PointingEstimate(x, y, confidence)
 
-    def snap(self, x: float, y: float, targets: tuple[SemanticTarget, ...]) -> tuple[float, float, str | None]:
+    def snap(
+        self, x: float, y: float, targets: tuple[SemanticTarget, ...]
+    ) -> tuple[float, float, str | None]:
         if not targets or self.snap_radius <= 0.0:
             return x, y, None
         best: tuple[float, SemanticTarget, float, float] | None = None
