@@ -182,13 +182,16 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
 
     def _drag_from_palm(self, hand: HandObservation) -> GestureDetection | None:
         palm_x, palm_y = self._palm_anchor(hand)
-        if self.precision_drag.update(
-            palm_x,
-            palm_y,
-            x_span=self.pointer.x_span,
-            y_span=self.pointer.y_span,
-            mirror_x=self.pointer.mirror_x,
-        ) is None:
+        if (
+            self.precision_drag.update(
+                palm_x,
+                palm_y,
+                x_span=self.pointer.x_span,
+                y_span=self.pointer.y_span,
+                mirror_x=self.pointer.mirror_x,
+            )
+            is None
+        ):
             pointer_x = self.spatial.state.pointer_x or 0.0
             pointer_y = self.spatial.state.pointer_y or 0.0
             self.precision_drag.begin(palm_x, palm_y, pointer_x, pointer_y)
