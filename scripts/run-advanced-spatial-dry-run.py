@@ -23,12 +23,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ray-gain", type=float, default=0.22)
     parser.add_argument("--snap-radius", type=float, default=0.035)
     parser.add_argument("--snap-strength", type=float, default=0.62)
+    parser.add_argument("--throw-threshold", type=float, default=0.22)
     return parser.parse_args()
 
 
 def calibration(args: argparse.Namespace, root: Path) -> PointerCalibration:
     path = root / "runtime-data" / "spatial" / "pointer_calibration.json"
-    base = PointerCalibration.load(path) if path.is_file() else PointerCalibration(0.12, 0.88, 0.12, 0.88, True, 0.58)
+    base = (
+        PointerCalibration.load(path)
+        if path.is_file()
+        else PointerCalibration(0.12, 0.88, 0.12, 0.88, True, 0.58)
+    )
     return PointerCalibration(
         x_min=base.x_min if args.x_min is None else args.x_min,
         x_max=base.x_max if args.x_max is None else args.x_max,
@@ -44,7 +49,15 @@ async def main() -> int:
     root = Path(__file__).resolve().parents[1]
     model = root / "models" / "vision" / "hand_landmarker.task"
     state = root / "runtime-data" / "overlay" / "state.json"
-    overlay = root / "apps" / "overlay-host" / "bin" / "Release" / "net10.0-windows" / "Pangu.OverlayHost.dll"
+    overlay = (
+        root
+        / "apps"
+        / "overlay-host"
+        / "bin"
+        / "Release"
+        / "net10.0-windows"
+        / "Pangu.OverlayHost.dll"
+    )
     cal = calibration(args, root)
 
     if not model.is_file():
@@ -71,6 +84,7 @@ async def main() -> int:
         ray_gain=args.ray_gain,
         snap_radius=args.snap_radius,
         snap_strength=args.snap_strength,
+        throw_velocity_threshold=args.throw_threshold,
     )
 
     try:
@@ -80,10 +94,13 @@ async def main() -> int:
         print("- One Euro adaptive filtering reduces jitter without heavy lag")
         print("- semantic target magnetism assists nearby UI acquisition")
         print("- closed fist air-grabs the active Chrome tab")
+        print("- fast fist movement + open palm triggers THROW_TO_CLOSE")
         print("- real closing remains DISABLED")
+        print(f"- throw velocity threshold={args.throw_threshold:.2f}")
         print("START:", runtime.diagnostics())
         await runtime.run(args.seconds)
         print("FINAL:", runtime.diagnostics())
+        print("THROW:", runtime.throw_diagnostics())
     finally:
         await runtime.stop()
         if overlay_process.poll() is None:
