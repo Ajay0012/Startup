@@ -224,16 +224,16 @@ class HudStateBridge:
         elif topic == "spatial.proposal":
             action = self._safe_text(payload.get("action", ""), 40)
             self.state.spatial.interaction = action or None
-            self.state.spatial.grabbed = bool(payload.get("grabbed", action in {"GRAB_BEGIN", "DRAG"}))
+            self.state.spatial.grabbed = bool(
+                payload.get("grabbed", action in {"GRAB_BEGIN", "DRAG"})
+            )
             target_id = self._safe_text(payload.get("target_id", ""), 120)
             self.state.spatial.grabbed_target_id = target_id or None
             try:
                 self.state.spatial.throw_speed = max(0.0, float(payload.get("speed", 0.0)))
             except (TypeError, ValueError):
                 self.state.spatial.throw_speed = 0.0
-            self.state.spatial.confirmation_required = bool(
-                payload.get("requires_approval", False)
-            )
+            self.state.spatial.confirmation_required = bool(payload.get("requires_approval", False))
             self.state.spatial.trash_zone = HudZone(
                 "TRASH",
                 0.82,

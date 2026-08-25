@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from pangu.browser_targets import ChromeSemanticTargetAdapter
 
 
