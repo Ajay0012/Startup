@@ -238,10 +238,13 @@ class LiveSpatialDryRunRuntime:
             self._finger_extended(hand, 20, 18),
         )
         wrist = points[0]
-        mean_tip_radius = sum(
-            hypot(wrist.x - points[index].x, wrist.y - points[index].y)
-            for index in (4, 8, 12, 16, 20)
-        ) / 5
+        mean_tip_radius = (
+            sum(
+                hypot(wrist.x - points[index].x, wrist.y - points[index].y)
+                for index in (4, 8, 12, 16, 20)
+            )
+            / 5
+        )
         pinch_distance = hypot(points[4].x - points[8].x, points[4].y - points[8].y)
 
         # A real closed fist wins over the thumb/index proximity that otherwise makes
@@ -380,7 +383,9 @@ class LiveSpatialDryRunRuntime:
     def _sticky_target(self) -> SemanticTarget | None:
         if self._sticky_target_id is None or monotonic() > self._sticky_until:
             return None
-        return next((item for item in self._targets if item.target_id == self._sticky_target_id), None)
+        return next(
+            (item for item in self._targets if item.target_id == self._sticky_target_id), None
+        )
 
     async def _handle_proposal(self, proposal: SpatialActionProposal) -> None:
         self._proposals += 1
@@ -482,11 +487,14 @@ class LiveSpatialDryRunRuntime:
                 sticky = self._sticky_target()
                 targets_for_pose = interaction_targets
                 if pose.gesture == GestureKind.GRAB and sticky is not None:
-                    targets_for_pose = tuple(
-                        target
-                        for target in interaction_targets
-                        if target.target_id == sticky.target_id
-                    ) or interaction_targets
+                    targets_for_pose = (
+                        tuple(
+                            target
+                            for target in interaction_targets
+                            if target.target_id == sticky.target_id
+                        )
+                        or interaction_targets
+                    )
 
                 proposal = self.spatial.propose(pose, targets_for_pose)
                 if proposal is not None:
