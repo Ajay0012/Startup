@@ -105,9 +105,7 @@ class PrecisionTargetLock:
 
         cx, cy = self._center(locked)
         slow_factor = max(0.0, min(1.0, 1.0 - speed / self.slow_speed))
-        strength = self.base_strength + (
-            self.precision_strength - self.base_strength
-        ) * slow_factor
+        strength = self.base_strength + (self.precision_strength - self.base_strength) * slow_factor
         out_x = x + (cx - x) * strength
         out_y = y + (cy - y) * strength
         return PrecisionPoint(
