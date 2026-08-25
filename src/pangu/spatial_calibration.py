@@ -28,7 +28,7 @@ class PointerCalibration:
         path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
 
     @classmethod
-    def load(cls, path: Path) -> "PointerCalibration":
+    def load(cls, path: Path) -> PointerCalibration:
         data = json.loads(path.read_text(encoding="utf-8"))
         return cls(
             x_min=float(data["x_min"]),
