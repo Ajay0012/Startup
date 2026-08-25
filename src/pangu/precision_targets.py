@@ -99,8 +99,7 @@ class PrecisionSemanticTargetAdapter:
             targets.append(
                 SemanticTarget(
                     target_id=(
-                        f"uia:{element.window_handle}:{control_type}:"
-                        f"{identity[:90]}:{len(targets)}"
+                        f"uia:{element.window_handle}:{control_type}:{identity[:90]}:{len(targets)}"
                     ),
                     kind=self._target_kind(element.control_type),
                     x=x,
