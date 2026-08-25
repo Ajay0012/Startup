@@ -14,6 +14,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--no-mirror-x", action="store_true")
+    parser.add_argument("--x-min", type=float, default=0.12)
+    parser.add_argument("--x-max", type=float, default=0.88)
+    parser.add_argument("--y-min", type=float, default=0.12)
+    parser.add_argument("--y-max", type=float, default=0.88)
+    parser.add_argument("--smoothing", type=float, default=0.38)
+    parser.add_argument("--target-padding", type=float, default=0.018)
     return parser.parse_args()
 
 
@@ -52,16 +58,27 @@ async def main() -> int:
         hud_state_path=state,
         camera_index=args.camera,
         mirror_x=not args.no_mirror_x,
+        pointer_x_min=args.x_min,
+        pointer_x_max=args.x_max,
+        pointer_y_min=args.y_min,
+        pointer_y_max=args.y_max,
+        pointer_smoothing=args.smoothing,
+        target_padding=args.target_padding,
     )
 
     try:
         await runtime.start()
         print("PANGU LIVE SPATIAL DRY RUN")
         print("- Chrome must be foreground for tab targeting")
-        print("- POINT moves the HUD pointer")
-        print("- stable GRAB enters grab state")
+        print("- POINT moves the calibrated HUD pointer")
+        print("- stable GRAB uses a 2-frame hysteresis gate")
         print("- OPEN_PALM releases")
+        print("- tab hit-testing has a small camera-friendly acquisition halo")
         print("- real tab closing is DISABLED")
+        print(
+            f"- pointer calibration x=({args.x_min:.2f},{args.x_max:.2f}) "
+            f"y=({args.y_min:.2f},{args.y_max:.2f}) smoothing={args.smoothing:.2f}"
+        )
         print()
         print("START:", runtime.diagnostics())
         await runtime.run(args.seconds)
