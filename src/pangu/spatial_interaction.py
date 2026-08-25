@@ -237,9 +237,7 @@ class SpatialInteractionController:
             vx, vy, speed = self._release_velocity()
             projected_x, projected_y = self._project(x, y, vx, vy)
             throw_to_close = (
-                target is not None
-                and target.closable
-                and speed >= self.throw_velocity_threshold
+                target is not None and target.closable and speed >= self.throw_velocity_threshold
             )
             if throw_to_close:
                 approval = bool(target.destructive or target.unsaved or target.selection_count > 1)
