@@ -1,11 +1,33 @@
 from pangu.gestures import GestureDetection, GestureKind
-from pangu.spatial_interaction import SpatialAction, SpatialInteractionController
+from pangu.spatial_interaction import (
+    SemanticTarget,
+    SpatialAction,
+    SpatialInteractionController,
+    TrashZone,
+)
 
 
 def detection(
-    kind: GestureKind, metadata: dict[str, float | str] | None = None
+    kind: GestureKind,
+    metadata: dict[str, float | str] | None = None,
+    *,
+    timestamp: float = 1.0,
 ) -> GestureDetection:
-    return GestureDetection(kind, 0.9, ("right-0",), 1.0, metadata or {})
+    return GestureDetection(kind, 0.9, ("right-0",), timestamp, metadata or {})
+
+
+def target(**overrides: object) -> SemanticTarget:
+    values: dict[str, object] = {
+        "target_id": "tab-1",
+        "kind": "browser_tab",
+        "x": 0.20,
+        "y": 0.20,
+        "width": 0.20,
+        "height": 0.20,
+        "closable": True,
+    }
+    values.update(overrides)
+    return SemanticTarget(**values)  # type: ignore[arg-type]
 
 
 def test_point_only_proposes_pointer_motion() -> None:
@@ -19,6 +41,19 @@ def test_point_only_proposes_pointer_motion() -> None:
     assert controller.state.pointer_y == 0.75
 
 
+def test_point_over_semantic_target_proposes_hover_not_os_input() -> None:
+    controller = SpatialInteractionController()
+    proposal = controller.propose(
+        detection(GestureKind.POINT, {"x": 0.25, "y": 0.25}),
+        (target(),),
+    )
+
+    assert proposal is not None
+    assert proposal.action == SpatialAction.HOVER_TARGET
+    assert proposal.parameters["target_id"] == "tab-1"
+    assert proposal.requires_target_resolution is True
+
+
 def test_pinch_is_a_selection_proposal_not_direct_execution() -> None:
     controller = SpatialInteractionController()
     controller.propose(detection(GestureKind.POINT, {"x": 0.4, "y": 0.6}))
@@ -27,7 +62,117 @@ def test_pinch_is_a_selection_proposal_not_direct_execution() -> None:
     assert proposal is not None
     assert proposal.action == SpatialAction.SELECT
     assert proposal.requires_target_resolution is True
-    assert proposal.parameters == {"x": 0.4, "y": 0.6}
+    assert proposal.parameters["x"] == 0.4
+    assert proposal.parameters["y"] == 0.6
+
+
+def test_grab_then_point_proposes_drag_for_same_semantic_target() -> None:
+    controller = SpatialInteractionController()
+    item = target()
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.25, "y": 0.25}, timestamp=1.0),
+        (item,),
+    )
+    grab = controller.propose(detection(GestureKind.GRAB, timestamp=1.05), (item,))
+    drag = controller.propose(
+        detection(GestureKind.POINT, {"x": 0.60, "y": 0.55}, timestamp=1.20),
+        (item,),
+    )
+
+    assert grab is not None and grab.action == SpatialAction.GRAB_BEGIN
+    assert drag is not None and drag.action == SpatialAction.DRAG
+    assert drag.parameters["target_id"] == "tab-1"
+    assert controller.state.grabbed is True
+
+
+def test_fast_throw_into_trash_proposes_close_but_does_not_execute() -> None:
+    controller = SpatialInteractionController(throw_velocity_threshold=0.5)
+    item = target()
+    zone = TrashZone(x=0.75, y=0.70, width=0.25, height=0.30)
+
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.25, "y": 0.25}, timestamp=1.0),
+        (item,),
+        zone,
+    )
+    controller.propose(detection(GestureKind.GRAB, timestamp=1.05), (item,), zone)
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.70, "y": 0.65}, timestamp=1.20),
+        (item,),
+        zone,
+    )
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.80, "y": 0.76}, timestamp=1.28),
+        (item,),
+        zone,
+    )
+    proposal = controller.propose(
+        detection(GestureKind.OPEN_PALM, timestamp=1.30),
+        (item,),
+        zone,
+    )
+
+    assert proposal is not None
+    assert proposal.action == SpatialAction.THROW_TO_TRASH
+    assert proposal.parameters["target_id"] == "tab-1"
+    assert proposal.requires_target_resolution is True
+    assert proposal.requires_approval is False
+    assert controller.state.grabbed is False
+
+
+def test_unsaved_or_multi_target_throw_requires_approval() -> None:
+    controller = SpatialInteractionController(throw_velocity_threshold=0.5)
+    item = target(unsaved=True, selection_count=2, destructive=True)
+    zone = TrashZone(x=0.75, y=0.70, width=0.25, height=0.30)
+
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.25, "y": 0.25}, timestamp=2.0),
+        (item,),
+        zone,
+    )
+    controller.propose(detection(GestureKind.GRAB, timestamp=2.05), (item,), zone)
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.82, "y": 0.80}, timestamp=2.25),
+        (item,),
+        zone,
+    )
+    proposal = controller.propose(
+        detection(GestureKind.OPEN_PALM, timestamp=2.28),
+        (item,),
+        zone,
+    )
+
+    assert proposal is not None
+    assert proposal.action == SpatialAction.THROW_TO_TRASH
+    assert proposal.requires_approval is True
+    assert proposal.parameters["selection_count"] == 2
+    assert proposal.parameters["unsaved"] is True
+
+
+def test_slow_release_never_becomes_throw() -> None:
+    controller = SpatialInteractionController(throw_velocity_threshold=0.5)
+    item = target()
+    zone = TrashZone(x=0.75, y=0.70, width=0.25, height=0.30)
+
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.25, "y": 0.25}, timestamp=3.0),
+        (item,),
+        zone,
+    )
+    controller.propose(detection(GestureKind.GRAB, timestamp=3.05), (item,), zone)
+    controller.propose(
+        detection(GestureKind.POINT, {"x": 0.80, "y": 0.80}, timestamp=4.50),
+        (item,),
+        zone,
+    )
+    proposal = controller.propose(
+        detection(GestureKind.OPEN_PALM, timestamp=4.55),
+        (item,),
+        zone,
+    )
+
+    assert proposal is not None
+    assert proposal.action == SpatialAction.RELEASE
 
 
 def test_two_hand_scale_stays_a_proposal() -> None:
