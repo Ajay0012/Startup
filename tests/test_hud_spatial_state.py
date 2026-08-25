@@ -12,7 +12,7 @@ async def test_hud_bridge_serializes_live_spatial_pointer_and_trash_state(tmp_pa
     bridge = HudStateBridge(EventBus(), path, minimum_write_interval=0.0)
     await bridge.start()
 
-    await bridge._on_event(  # noqa: SLF001 - focused bridge contract test
+    await bridge._on_event(
         EventEnvelope(
             "gesture.detected",
             {
@@ -22,7 +22,7 @@ async def test_hud_bridge_serializes_live_spatial_pointer_and_trash_state(tmp_pa
             },
         )
     )
-    await bridge._on_event(  # noqa: SLF001
+    await bridge._on_event(
         EventEnvelope(
             "spatial.target",
             {
@@ -35,7 +35,7 @@ async def test_hud_bridge_serializes_live_spatial_pointer_and_trash_state(tmp_pa
             },
         )
     )
-    await bridge._on_event(  # noqa: SLF001
+    await bridge._on_event(
         EventEnvelope(
             "spatial.proposal",
             {
@@ -64,7 +64,7 @@ async def test_hud_bridge_marks_throw_confirmation_without_executing_action(tmp_
     bridge = HudStateBridge(EventBus(), path, minimum_write_interval=0.0)
     await bridge.start()
 
-    await bridge._on_event(  # noqa: SLF001
+    await bridge._on_event(
         EventEnvelope(
             "spatial.proposal",
             {
