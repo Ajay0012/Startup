@@ -79,7 +79,15 @@ class SpatialInteractionState:
 
 
 class SpatialInteractionController:
-    """Transforms gestures into safe proposals; it never performs OS input directly."""
+    """Transforms gestures into safe proposals; it never performs OS input directly.
+
+    A deliberate fist can air-grab the preferred semantic target even when the
+    pointer is not pixel-aligned with it. Callers should order targets by preference
+    (for example, active Chrome tab first). A sufficiently fast release is treated as
+    a throw-to-close proposal regardless of screen region, so the user does not need
+    to aim at a trash zone. Actual closing remains the responsibility of a guarded
+    execution layer after fresh target re-resolution.
+    """
 
     def __init__(
         self,
@@ -199,6 +207,9 @@ class SpatialInteractionController:
             x = self.state.pointer_x if self.state.pointer_x is not None else 0.0
             y = self.state.pointer_y if self.state.pointer_y is not None else 0.0
             target = self._resolve_target(x, y, targets)
+            air_grab = target is None and bool(targets)
+            if target is None and targets:
+                target = targets[0]
             if target is not None:
                 self.state.grabbed = True
                 self.state.grabbed_hand_id = hand_id
@@ -209,7 +220,12 @@ class SpatialInteractionController:
                     SpatialAction.GRAB_BEGIN,
                     detection.hand_ids,
                     detection.confidence,
-                    {"target_id": target.target_id, "x": x, "y": y},
+                    {
+                        "target_id": target.target_id,
+                        "x": x,
+                        "y": y,
+                        "air_grab": air_grab,
+                    },
                 )
 
         elif gesture == GestureKind.OPEN_PALM and self.state.grabbed:
@@ -220,14 +236,12 @@ class SpatialInteractionController:
             )
             vx, vy, speed = self._release_velocity()
             projected_x, projected_y = self._project(x, y, vx, vy)
-            zone = trash_zone or TrashZone()
-            throw_to_trash = (
+            throw_to_close = (
                 target is not None
                 and target.closable
                 and speed >= self.throw_velocity_threshold
-                and (zone.contains(x, y) or zone.contains(projected_x, projected_y))
             )
-            if throw_to_trash:
+            if throw_to_close:
                 approval = bool(target.destructive or target.unsaved or target.selection_count > 1)
                 proposal = SpatialActionProposal(
                     SpatialAction.THROW_TO_TRASH,
@@ -243,6 +257,7 @@ class SpatialInteractionController:
                         "speed": speed,
                         "projected_x": projected_x,
                         "projected_y": projected_y,
+                        "throw_anywhere": True,
                     },
                     requires_target_resolution=True,
                     requires_approval=approval,
