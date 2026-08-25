@@ -3,15 +3,23 @@ from __future__ import annotations
 from collections import deque
 from math import hypot
 from pathlib import Path
+from time import monotonic
 
 from .advanced_pointing import AdvancedPointingEstimator
 from .gestures import GestureDetection, GestureKind, HandObservation
+from .precision_motion import PrecisionDragController, PrecisionTargetLock
+from .precision_targets import PrecisionSemanticTargetAdapter
 from .spatial_interaction import SpatialAction, SpatialActionProposal
 from .spatial_live import GestureStabilizer, LiveSpatialDryRunRuntime
 
 
 class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
-    """Live dry-run runtime with ray pointing and robust manipulation poses."""
+    """Live dry-run runtime with ray pointing and precision semantic interaction.
+
+    A single RGB webcam cannot reproduce Vision Pro's eye tracking or depth-sensor
+    accuracy. This runtime instead closes the software gap with semantic UI targets,
+    target-lock hysteresis, velocity-aware assistance and clutch-like precision drag.
+    """
 
     def __init__(
         self,
@@ -50,6 +58,9 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             snap_radius=snap_radius,
             snap_strength=snap_strength,
         )
+        self.precision_targets = PrecisionSemanticTargetAdapter()
+        self.precision_lock = PrecisionTargetLock()
+        self.precision_drag = PrecisionDragController()
         self.spatial.throw_velocity_threshold = throw_velocity_threshold
         # A fast throw often exposes the palm for only a few video frames. Accept
         # release immediately while keeping GRAB and PINCH guarded against flicker.
@@ -62,9 +73,34 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         self._release_count = 0
         self._last_terminal_action: str | None = None
         self._last_release_speed = 0.0
+        self._semantic_target_count = 0
+        self._precision_locked_target_id: str | None = None
+        self._precision_mode = False
         # Independent palm trajectory survives slow UIA refreshes that can make the
         # generic controller's short trajectory window collapse to a single sample.
         self._drag_velocity_history: deque[tuple[float, float, float]] = deque(maxlen=48)
+
+    async def _refresh_browser_targets(self, *, force: bool = False) -> None:
+        now = monotonic()
+        if not force and now - self._last_browser_refresh < self.browser_refresh_seconds:
+            return
+
+        browser = self.browser.discover()
+        semantic = self.precision_targets.discover()
+        self._browser_state = browser.verification_state
+        self._browser_active = browser.window_active
+
+        # Keep Chrome tabs first so an air-grab still binds to the active browser tab.
+        # Add read-only actionable UIA controls afterwards for Vision-style target assist.
+        merged = list(browser.targets if browser.window_active else ())
+        seen = {target.target_id for target in merged}
+        for target in semantic.targets:
+            if target.target_id not in seen:
+                merged.append(target)
+                seen.add(target.target_id)
+        self._targets = tuple(merged)
+        self._semantic_target_count = len(semantic.targets)
+        self._last_browser_refresh = now
 
     def _manipulation_pose(self, hand: HandObservation) -> GestureDetection | None:
         """More tolerant fist/open-palm recognizer for high-speed manipulation."""
@@ -119,19 +155,23 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             return super()._point_from_fingertip(hand)
 
         mapped_x, mapped_y = self.pointer.map(estimate.x, estimate.y)
-        snapped_x, snapped_y, target_id = self.advanced_pointer.snap(
+        precise = self.precision_lock.apply(
             mapped_x,
             mapped_y,
+            hand.timestamp,
             self._interaction_targets(),
         )
+        self._precision_locked_target_id = precise.locked_target_id
+        self._precision_mode = precise.precision_mode
         metadata: dict[str, float | str] = {
-            "x": snapped_x,
-            "y": snapped_y,
-            "source": estimate.source,
+            "x": precise.x,
+            "y": precise.y,
+            "source": "semantic-ray-precision",
             "pointing_confidence": estimate.confidence,
+            "precision_mode": "true" if precise.precision_mode else "false",
         }
-        if target_id is not None:
-            metadata["snap_target_id"] = target_id
+        if precise.locked_target_id is not None:
+            metadata["snap_target_id"] = precise.locked_target_id
         return GestureDetection(
             GestureKind.POINT,
             estimate.confidence,
@@ -141,11 +181,37 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         )
 
     def _drag_from_palm(self, hand: HandObservation) -> GestureDetection | None:
-        detection = super()._drag_from_palm(hand)
-        if detection is None:
-            return None
-        x = float(detection.metadata.get("x", 0.0))
-        y = float(detection.metadata.get("y", 0.0))
+        palm_x, palm_y = self._palm_anchor(hand)
+        if self.precision_drag.update(
+            palm_x,
+            palm_y,
+            x_span=self.pointer.x_span,
+            y_span=self.pointer.y_span,
+            mirror_x=self.pointer.mirror_x,
+        ) is None:
+            pointer_x = self.spatial.state.pointer_x or 0.0
+            pointer_y = self.spatial.state.pointer_y or 0.0
+            self.precision_drag.begin(palm_x, palm_y, pointer_x, pointer_y)
+            precise = (pointer_x, pointer_y)
+        else:
+            precise = self.precision_drag.update(
+                palm_x,
+                palm_y,
+                x_span=self.pointer.x_span,
+                y_span=self.pointer.y_span,
+                mirror_x=self.pointer.mirror_x,
+            )
+            if precise is None:
+                return None
+
+        x, y = precise
+        detection = GestureDetection(
+            GestureKind.POINT,
+            hand.confidence,
+            (hand.hand_id,),
+            hand.timestamp,
+            {"x": x, "y": y, "source": "precision_incremental_palm"},
+        )
         self._drag_velocity_history.append((detection.timestamp, x, y))
         cutoff = detection.timestamp - 0.9
         while self._drag_velocity_history and self._drag_velocity_history[0][0] < cutoff:
@@ -164,7 +230,7 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
                 if elapsed < 0.06 or elapsed > 0.55:
                     continue
                 distance = hypot(end[1] - start[1], end[2] - start[2])
-                if distance < 0.045:
+                if distance < 0.025:
                     continue
                 best = max(best, distance / elapsed)
         return best
@@ -193,7 +259,7 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
                 "unsaved": target.unsaved,
                 "speed": robust_speed,
                 "throw_anywhere": True,
-                "velocity_source": "robust_palm_history",
+                "velocity_source": "precision_palm_history",
             },
             requires_target_resolution=True,
             requires_approval=approval,
@@ -207,6 +273,7 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             self._last_terminal_action = proposal.action.value
             self._last_release_speed = float(proposal.parameters.get("speed", 0.0))
             self._drag_velocity_history.clear()
+            self.precision_drag.reset()
         elif proposal.action == SpatialAction.RELEASE:
             self._release_count += 1
             self._last_terminal_action = proposal.action.value
@@ -214,8 +281,10 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
                 float(proposal.parameters.get("speed", 0.0)), self._robust_throw_speed()
             )
             self._drag_velocity_history.clear()
+            self.precision_drag.reset()
         elif proposal.action == SpatialAction.GRAB_BEGIN:
             self._drag_velocity_history.clear()
+            self.precision_drag.reset()
 
     def throw_diagnostics(self) -> dict[str, float | int | str | None]:
         """Terminal manipulation diagnostics that are not overwritten by later pointer moves."""
@@ -227,7 +296,16 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             "throw_threshold": round(self.spatial.throw_velocity_threshold, 4),
         }
 
+    def precision_diagnostics(self) -> dict[str, int | str | bool | None]:
+        return {
+            "semantic_targets": self._semantic_target_count,
+            "locked_target_id": self._precision_locked_target_id,
+            "precision_mode": self._precision_mode,
+        }
+
     async def stop(self) -> None:
         self.advanced_pointer.reset()
+        self.precision_lock.reset()
+        self.precision_drag.reset()
         self._drag_velocity_history.clear()
         await super().stop()
