@@ -222,7 +222,14 @@ class LiveSpatialDryRunRuntime:
                 await self.events.publish(
                     EventEnvelope(
                         "spatial.target",
-                        {"label": "", "x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0, "confidence": 0.0},
+                        {
+                            "label": "",
+                            "x": 0.0,
+                            "y": 0.0,
+                            "width": 0.0,
+                            "height": 0.0,
+                            "confidence": 0.0,
+                        },
                     )
                 )
             await self._publish_proposal(proposal)
