@@ -141,7 +141,9 @@ class ChromeSemanticTargetAdapter:
             if normalized is None:
                 continue
             x, y, width, height = normalized
-            automation_id = str(getattr(getattr(element, "element_info", None), "automation_id", "") or "")
+            automation_id = str(
+                getattr(getattr(element, "element_info", None), "automation_id", "") or ""
+            )
             target_id = f"chrome:{handle or 0}:tab:{automation_id or index}:{name[:80]}"
             targets.append(
                 SemanticTarget(
