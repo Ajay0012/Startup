@@ -28,6 +28,37 @@ class HudTarget:
     confidence: float = 1.0
 
 
+@dataclass(frozen=True)
+class HudPoint:
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class HudZone:
+    label: str
+    x: float
+    y: float
+    width: float
+    height: float
+    active: bool = False
+
+
+@dataclass
+class HudSpatialState:
+    pointer: HudPoint | None = None
+    trail: list[HudPoint] = field(default_factory=list)
+    gesture: str | None = None
+    grabbed: bool = False
+    grabbed_target_id: str | None = None
+    interaction: str | None = None
+    confirmation_required: bool = False
+    throw_speed: float = 0.0
+    trash_zone: HudZone = field(
+        default_factory=lambda: HudZone("TRASH", 0.82, 0.72, 0.16, 0.22, False)
+    )
+
+
 @dataclass
 class HudRuntimeState:
     mode: str = "listening"
@@ -36,6 +67,7 @@ class HudRuntimeState:
     audio_level: float = 0.08
     cards: list[HudCard] = field(default_factory=list)
     target: HudTarget | None = None
+    spatial: HudSpatialState = field(default_factory=HudSpatialState)
     updated_at: str = ""
 
 
@@ -55,7 +87,11 @@ class HudStateBridge:
         "mission.completed",
         "mission.failed",
         "world.delta",
+        "gesture.detected",
         "gesture.recognized",
+        "spatial.target",
+        "spatial.proposal",
+        "spatial.confirmation",
     )
 
     def __init__(
@@ -88,6 +124,19 @@ class HudStateBridge:
     def _safe_text(value: object, limit: int = 180) -> str:
         text = " ".join(str(value).split())
         return text[:limit]
+
+    @staticmethod
+    def _clamp(value: object, fallback: float = 0.0) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return fallback
+
+    def _set_pointer(self, x: object, y: object) -> None:
+        point = HudPoint(self._clamp(x), self._clamp(y))
+        self.state.spatial.pointer = point
+        self.state.spatial.trail.append(point)
+        del self.state.spatial.trail[:-18]
 
     async def _on_event(self, event: EventEnvelope) -> None:
         if not self._running:
@@ -152,12 +201,54 @@ class HudStateBridge:
                 ),
             )
             del self.state.cards[6:]
-        elif topic == "gesture.recognized":
+        elif topic in {"gesture.detected", "gesture.recognized"}:
             label = self._safe_text(payload.get("gesture", "gesture"), 32)
-            x = float(payload.get("x", 0.0))
-            y = float(payload.get("y", 0.0))
-            confidence = max(0.0, min(1.0, float(payload.get("confidence", 0.0))))
-            self.state.target = HudTarget(label, x, y, 0.08, 0.08, confidence)
+            metadata = payload.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            x = metadata.get("x", payload.get("x"))
+            y = metadata.get("y", payload.get("y"))
+            if x is not None and y is not None:
+                self._set_pointer(x, y)
+            self.state.spatial.gesture = label
+        elif topic == "spatial.target":
+            confidence = self._clamp(payload.get("confidence", 1.0), 1.0)
+            self.state.target = HudTarget(
+                self._safe_text(payload.get("label", "TARGET"), 48),
+                self._clamp(payload.get("x")),
+                self._clamp(payload.get("y")),
+                self._clamp(payload.get("width"), 0.08),
+                self._clamp(payload.get("height"), 0.08),
+                confidence,
+            )
+        elif topic == "spatial.proposal":
+            action = self._safe_text(payload.get("action", ""), 40)
+            self.state.spatial.interaction = action or None
+            self.state.spatial.grabbed = bool(payload.get("grabbed", action in {"GRAB_BEGIN", "DRAG"}))
+            target_id = self._safe_text(payload.get("target_id", ""), 120)
+            self.state.spatial.grabbed_target_id = target_id or None
+            try:
+                self.state.spatial.throw_speed = max(0.0, float(payload.get("speed", 0.0)))
+            except (TypeError, ValueError):
+                self.state.spatial.throw_speed = 0.0
+            self.state.spatial.confirmation_required = bool(
+                payload.get("requires_approval", False)
+            )
+            self.state.spatial.trash_zone = HudZone(
+                "TRASH",
+                0.82,
+                0.72,
+                0.16,
+                0.22,
+                self.state.spatial.grabbed or action == "THROW_TO_TRASH",
+            )
+            if action in {"RELEASE", "THROW_TO_TRASH"}:
+                self.state.spatial.grabbed = False
+                self.state.spatial.grabbed_target_id = None
+        elif topic == "spatial.confirmation":
+            self.state.spatial.confirmation_required = bool(payload.get("required", False))
+            if self.state.spatial.confirmation_required:
+                self.state.status = "CONFIRMATION REQUIRED"
         await self._write()
 
     async def set_audio_level(self, value: float) -> None:
@@ -176,6 +267,7 @@ class HudStateBridge:
             self.state.updated_at = (
                 __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
             )
+            spatial = self.state.spatial
             payload = {
                 "Mode": self.state.mode,
                 "Status": self.state.status,
@@ -194,6 +286,26 @@ class HudStateBridge:
                     "Width": self.state.target.width,
                     "Height": self.state.target.height,
                     "Confidence": self.state.target.confidence,
+                },
+                "Spatial": {
+                    "Pointer": None
+                    if spatial.pointer is None
+                    else {"X": spatial.pointer.x, "Y": spatial.pointer.y},
+                    "Trail": [{"X": point.x, "Y": point.y} for point in spatial.trail[-18:]],
+                    "Gesture": spatial.gesture,
+                    "Grabbed": spatial.grabbed,
+                    "GrabbedTargetId": spatial.grabbed_target_id,
+                    "Interaction": spatial.interaction,
+                    "ConfirmationRequired": spatial.confirmation_required,
+                    "ThrowSpeed": spatial.throw_speed,
+                    "TrashZone": {
+                        "Label": spatial.trash_zone.label,
+                        "X": spatial.trash_zone.x,
+                        "Y": spatial.trash_zone.y,
+                        "Width": spatial.trash_zone.width,
+                        "Height": spatial.trash_zone.height,
+                        "Active": spatial.trash_zone.active,
+                    },
                 },
                 "UpdatedAt": self.state.updated_at,
             }
