@@ -264,6 +264,8 @@ class MediaPipeHandTracker:
         self._cv2: Any | None = None
         self._status = "STOPPED"
         self._last_error: str | None = None
+        self._video_started_at: float | None = None
+        self._last_timestamp_ms = -1
 
     def start(self) -> None:
         if not self.model_path.is_file():
@@ -276,16 +278,18 @@ class MediaPipeHandTracker:
             base_options = self._mp.tasks.BaseOptions(model_asset_path=str(self.model_path))
             options = self._mp.tasks.vision.HandLandmarkerOptions(
                 base_options=base_options,
-                running_mode=self._mp.tasks.vision.RunningMode.IMAGE,
+                running_mode=self._mp.tasks.vision.RunningMode.VIDEO,
                 num_hands=self.max_hands,
-                min_hand_detection_confidence=0.5,
-                min_hand_presence_confidence=0.5,
-                min_tracking_confidence=0.5,
+                min_hand_detection_confidence=0.3,
+                min_hand_presence_confidence=0.3,
+                min_tracking_confidence=0.3,
             )
             self._landmarker = self._mp.tasks.vision.HandLandmarker.create_from_options(options)
             self._camera = self._cv2.VideoCapture(self.camera_index)
             if not self._camera.isOpened():
                 raise RuntimeError("camera unavailable")
+            self._video_started_at = monotonic()
+            self._last_timestamp_ms = -1
             self._status = "READY"
             self._last_error = None
         except (ImportError, ModuleNotFoundError):
@@ -297,7 +301,12 @@ class MediaPipeHandTracker:
             self._last_error = "GESTURE_START_FAILED"
 
     def read(self) -> tuple[HandObservation, ...]:
-        if self._status != "READY" or self._camera is None or self._landmarker is None:
+        if (
+            self._status != "READY"
+            or self._camera is None
+            or self._landmarker is None
+            or self._video_started_at is None
+        ):
             return ()
         ok, frame = self._camera.read()
         if not ok:
@@ -305,8 +314,13 @@ class MediaPipeHandTracker:
             return ()
         rgb = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = max(
+            self._last_timestamp_ms + 1,
+            int((monotonic() - self._video_started_at) * 1000),
+        )
+        self._last_timestamp_ms = timestamp_ms
         try:
-            result = self._landmarker.detect(image)
+            result = self._landmarker.detect_for_video(image, timestamp_ms)
         except (RuntimeError, ValueError):
             self._last_error = "HAND_LANDMARK_INFERENCE_FAILED"
             return ()
@@ -334,6 +348,8 @@ class MediaPipeHandTracker:
             self._landmarker.close()
         self._camera = None
         self._landmarker = None
+        self._video_started_at = None
+        self._last_timestamp_ms = -1
         if self._status == "READY":
             self._status = "STOPPED"
 
@@ -343,6 +359,7 @@ class MediaPipeHandTracker:
             "status": self._status,
             "camera_index": self.camera_index,
             "max_hands": self.max_hands,
+            "running_mode": "VIDEO",
             "model_path_sanitized": self.model_path.name,
             "last_error": self._last_error,
             "frames_persisted": False,
