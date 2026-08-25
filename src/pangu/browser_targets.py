@@ -41,7 +41,9 @@ class ChromeSemanticTargetAdapter:
             return fallback
 
     @staticmethod
-    def _normalized_rect(rect: Any, reference_rect: Any) -> tuple[float, float, float, float] | None:
+    def _normalized_rect(
+        rect: Any, reference_rect: Any
+    ) -> tuple[float, float, float, float] | None:
         try:
             reference_width = max(1, int(reference_rect.right) - int(reference_rect.left))
             reference_height = max(1, int(reference_rect.bottom) - int(reference_rect.top))
