@@ -74,6 +74,18 @@ def test_snapshot_tracks_foreground_state_without_changing_target_safety() -> No
 
     assert snapshot.window_active is True
     assert snapshot.targets == ()
+    assert snapshot.active_target_id is None
+
+
+def test_active_tab_title_strips_chrome_suffix() -> None:
+    assert (
+        ChromeSemanticTargetAdapter._active_tab_title("PANGU CI Finish - Google Chrome")
+        == "PANGU CI Finish"
+    )
+
+
+def test_active_tab_title_handles_empty_value() -> None:
+    assert ChromeSemanticTargetAdapter._active_tab_title(None) == ""
 
 
 def test_safe_returns_fallback_when_uia_callable_fails() -> None:
