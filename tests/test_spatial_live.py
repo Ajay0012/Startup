@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from pangu.gestures import GestureDetection, GestureKind
 from pangu.spatial_interaction import SemanticTarget
 from pangu.spatial_live import GestureStabilizer, LiveSpatialDryRunRuntime, PointerMapper
@@ -105,10 +107,10 @@ def test_interaction_targets_gain_small_acquisition_halo() -> None:
     )
     expanded = runtime._interaction_targets()[0]
     assert expanded.target_id == "tab-1"
-    assert expanded.x == 0.18
-    assert expanded.y == 0.08
-    assert round(expanded.width, 3) == 0.24
-    assert round(expanded.height, 3) == 0.09
+    assert expanded.x == pytest.approx(0.18)
+    assert expanded.y == pytest.approx(0.08)
+    assert expanded.width == pytest.approx(0.24)
+    assert expanded.height == pytest.approx(0.09)
 
 
 def test_runtime_diagnostics_explicitly_reports_dry_run() -> None:
