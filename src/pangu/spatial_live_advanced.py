@@ -62,8 +62,6 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         self.precision_lock = PrecisionTargetLock()
         self.precision_drag = PrecisionDragController()
         self.spatial.throw_velocity_threshold = throw_velocity_threshold
-        # A fast throw often exposes the palm for only a few video frames. Accept
-        # release immediately while keeping GRAB and PINCH guarded against flicker.
         self.stabilizer = GestureStabilizer(
             grab_frames=2,
             open_palm_frames=1,
@@ -76,8 +74,6 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         self._semantic_target_count = 0
         self._precision_locked_target_id: str | None = None
         self._precision_mode = False
-        # Independent palm trajectory survives slow UIA refreshes that can make the
-        # generic controller's short trajectory window collapse to a single sample.
         self._drag_velocity_history: deque[tuple[float, float, float]] = deque(maxlen=48)
 
     async def _refresh_browser_targets(self, *, force: bool = False) -> None:
@@ -89,9 +85,6 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         semantic = self.precision_targets.discover()
         self._browser_state = browser.verification_state
         self._browser_active = browser.window_active
-
-        # Keep Chrome tabs first so an air-grab still binds to the active browser tab.
-        # Add read-only actionable UIA controls afterwards for Vision-style target assist.
         merged = list(browser.targets if browser.window_active else ())
         seen = {target.target_id for target in merged}
         for target in semantic.targets:
@@ -103,8 +96,6 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         self._last_browser_refresh = now
 
     def _manipulation_pose(self, hand: HandObservation) -> GestureDetection | None:
-        """More tolerant fist/open-palm recognizer for high-speed manipulation."""
-
         points = hand.landmarks
         extended = (
             self._finger_extended(hand, 8, 6),
@@ -182,30 +173,18 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
 
     def _drag_from_palm(self, hand: HandObservation) -> GestureDetection | None:
         palm_x, palm_y = self._palm_anchor(hand)
-        if (
-            self.precision_drag.update(
-                palm_x,
-                palm_y,
-                x_span=self.pointer.x_span,
-                y_span=self.pointer.y_span,
-                mirror_x=self.pointer.mirror_x,
-            )
-            is None
-        ):
+        precise = self.precision_drag.update(
+            palm_x,
+            palm_y,
+            x_span=self.pointer.x_span,
+            y_span=self.pointer.y_span,
+            mirror_x=self.pointer.mirror_x,
+        )
+        if precise is None:
             pointer_x = self.spatial.state.pointer_x or 0.0
             pointer_y = self.spatial.state.pointer_y or 0.0
             self.precision_drag.begin(palm_x, palm_y, pointer_x, pointer_y)
             precise = (pointer_x, pointer_y)
-        else:
-            precise = self.precision_drag.update(
-                palm_x,
-                palm_y,
-                x_span=self.pointer.x_span,
-                y_span=self.pointer.y_span,
-                mirror_x=self.pointer.mirror_x,
-            )
-            if precise is None:
-                return None
 
         x, y = precise
         detection = GestureDetection(
@@ -222,7 +201,6 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
         return detection
 
     def _robust_throw_speed(self) -> float:
-        """Return recent intentional palm speed while rejecting tiny jitter spans."""
         samples = tuple(self._drag_velocity_history)
         if len(samples) < 2:
             return 0.0
@@ -290,7 +268,6 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
             self.precision_drag.reset()
 
     def throw_diagnostics(self) -> dict[str, float | int | str | None]:
-        """Terminal manipulation diagnostics that are not overwritten by later pointer moves."""
         return {
             "throws": self._throw_count,
             "releases": self._release_count,
