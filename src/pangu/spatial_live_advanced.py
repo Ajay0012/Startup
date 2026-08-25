@@ -169,9 +169,7 @@ class AdvancedLiveSpatialDryRunRuntime(LiveSpatialDryRunRuntime):
                 best = max(best, distance / elapsed)
         return best
 
-    def _upgrade_release_to_throw(
-        self, proposal: SpatialActionProposal
-    ) -> SpatialActionProposal:
+    def _upgrade_release_to_throw(self, proposal: SpatialActionProposal) -> SpatialActionProposal:
         if proposal.action != SpatialAction.RELEASE:
             return proposal
         target_id = str(proposal.parameters.get("target_id", ""))
