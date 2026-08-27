@@ -5,6 +5,7 @@ from math import hypot, pi
 from time import monotonic
 
 from .gestures import HandObservation
+from .hand_geometry import build_dense_geometry, stable_index_direction
 from .spatial_interaction import SemanticTarget
 
 
@@ -13,7 +14,7 @@ class PointingEstimate:
     x: float
     y: float
     confidence: float
-    source: str = "advanced-index-ray"
+    source: str = "advanced-index-ray-42-control-points"
 
 
 class OneEuroAxis:
@@ -58,12 +59,12 @@ class OneEuroAxis:
 
 
 class AdvancedPointingEstimator:
-    """Stable pointer estimate from the full index-finger chain, not only the fingertip.
+    """Stable pointer estimate from fused 21-point hands plus dense derived geometry.
 
-    The estimator combines MCP→PIP, PIP→DIP and DIP→TIP vectors, rejects weak pointing
-    poses, projects a short ray beyond the fingertip, applies low-lag One Euro filtering,
-    and can softly snap near semantic UI targets. It consumes only landmarks and never
-    stores camera frames.
+    MediaPipe and YOLO each provide the same 21 anatomical hand landmarks. They are
+    fused first. This estimator then builds 21 additional geometric control points
+    (20 bone midpoints + palm center), giving 42 control points for motion reasoning
+    without falsely claiming that the camera detected 42 independent landmarks.
     """
 
     def __init__(
@@ -110,25 +111,20 @@ class AdvancedPointingEstimator:
 
     @staticmethod
     def _index_direction(hand: HandObservation) -> tuple[float, float]:
-        points = hand.landmarks
-        mcp, pip, dip, tip = points[5], points[6], points[7], points[8]
-        vectors = (
-            (pip.x - mcp.x, pip.y - mcp.y, 0.15),
-            (dip.x - pip.x, dip.y - pip.y, 0.30),
-            (tip.x - dip.x, tip.y - dip.y, 0.55),
-        )
-        dx = sum(vx * weight for vx, _, weight in vectors)
-        dy = sum(vy * weight for _, vy, weight in vectors)
-        norm = hypot(dx, dy)
-        if norm <= 1e-6:
-            return 0.0, 0.0
-        return dx / norm, dy / norm
+        return stable_index_direction(hand)
 
     def estimate(
         self, hand: HandObservation, *, timestamp: float | None = None
     ) -> PointingEstimate | None:
+        geometry = build_dense_geometry(hand)
         extension = self._finger_extension_score(hand)
-        confidence = min(1.0, hand.confidence * (0.55 + 0.45 * extension))
+        # Very tiny projected hands are less reliable for exact pointing. Palm scale
+        # contributes only a small confidence term; it does not block normal use.
+        scale_quality = min(1.0, geometry.palm_scale / 0.12)
+        confidence = min(
+            1.0,
+            hand.confidence * (0.50 + 0.40 * extension + 0.10 * scale_quality),
+        )
         if confidence < self.min_confidence:
             return None
 
