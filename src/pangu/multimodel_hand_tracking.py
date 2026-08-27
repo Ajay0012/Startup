@@ -168,7 +168,9 @@ class LandmarkFusion:
             )
             / 0.22,
         )
-        confidence = min(1.0, 0.58 * primary.confidence + 0.32 * secondary.confidence + 0.10 * agreement)
+        confidence = min(
+            1.0, 0.58 * primary.confidence + 0.32 * secondary.confidence + 0.10 * agreement
+        )
         return HandObservation(
             primary.hand_id,
             primary.handedness,
@@ -265,7 +267,12 @@ class MultiModelHandTracker:
             self._last_error = "MULTIMODEL_TRACKER_START_FAILED"
 
     def _mediapipe_observations(self, frame: Any, timestamp: float) -> tuple[HandObservation, ...]:
-        if self._landmarker is None or self._mp is None or self._cv2 is None or self._started_at is None:
+        if (
+            self._landmarker is None
+            or self._mp is None
+            or self._cv2 is None
+            or self._started_at is None
+        ):
             return ()
         rgb = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
@@ -323,9 +330,7 @@ class MultiModelHandTracker:
             row = xyn[index]
             if len(row) != 21:
                 continue
-            points = tuple(
-                HandLandmark(float(point[0]), float(point[1]), 0.0) for point in row
-            )
+            points = tuple(HandLandmark(float(point[0]), float(point[1]), 0.0) for point in row)
             confidence = 0.75
             try:
                 if conf_tensor is not None:
@@ -363,7 +368,9 @@ class MultiModelHandTracker:
 
         if primary and secondary:
             pairs = LandmarkFusion.match(primary, secondary)
-            fused_by_id = {first.hand_id: LandmarkFusion.fuse(first, second) for first, second in pairs}
+            fused_by_id = {
+                first.hand_id: LandmarkFusion.fuse(first, second) for first, second in pairs
+            }
             output = tuple(fused_by_id.get(hand.hand_id, hand) for hand in primary)
             self._fused_frames += 1
         elif primary:
