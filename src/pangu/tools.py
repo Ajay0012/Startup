@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .capabilities import CapabilityCatalog
+from .approvals import PersistentApprovalService
+from .capabilities import CapabilityCatalog, ToolSpecification
 from .contracts import Risk, Status, ToolRequest, ToolResult
 from .filesystem import FilesystemAdapter
 from .permissions import PermissionStore
@@ -16,7 +17,7 @@ class ToolRuntime:
         safety: SafetyGateway,
         catalog: CapabilityCatalog,
         permissions: PermissionStore,
-        approvals: ApprovalStore,
+        approvals: PersistentApprovalService | ApprovalStore,
     ) -> None:
         self.root = allowed_root.resolve()
         self.safety = safety
@@ -24,6 +25,56 @@ class ToolRuntime:
         self.permissions = permissions
         self.approvals = approvals
         self.filesystem = FilesystemAdapter(self.root)
+
+    def _approval_target(self, request: ToolRequest) -> str:
+        candidate = request.arguments.get("path") or request.arguments.get("name")
+        if candidate is not None:
+            try:
+                return str(self.filesystem.resolve(str(candidate)))
+            except PermissionError:
+                return str(self.root / "runtime-data" / "approval-targets" / "rejected-path")
+        safe_tool = "".join(
+            ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in request.tool_id
+        )
+        safe_operation = "".join(
+            ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in request.operation
+        )
+        return str(
+            self.root / "runtime-data" / "approval-targets" / f"{safe_tool}-{safe_operation}"
+        )
+
+    def issue_approval(self, request: ToolRequest, seconds: int = 300) -> str:
+        specification = self.catalog.resolve(request.tool_id, request.operation)
+        if specification.risk not in {Risk.HIGH, Risk.PRIVILEGED}:
+            raise ValueError("explicit approval is only issued for high or privileged operations")
+        if isinstance(self.approvals, PersistentApprovalService):
+            return self.approvals.issue_tool_request(
+                request,
+                specification,
+                self._approval_target(request),
+                seconds=seconds,
+            )
+        return self.approvals.issue(request, seconds)
+
+    def _approved(
+        self,
+        request: ToolRequest,
+        specification: ToolSpecification,
+        approval: str | None,
+    ) -> bool:
+        if specification.risk not in {Risk.HIGH, Risk.PRIVILEGED}:
+            return True
+        if not approval:
+            return False
+        if isinstance(self.approvals, PersistentApprovalService):
+            denial = self.approvals.consume_tool_request(
+                approval,
+                request,
+                specification,
+                self._approval_target(request),
+            )
+            return denial is None
+        return self.approvals.consume(request, approval)
 
     def execute(self, request: ToolRequest, approval: str | None = None) -> ToolResult:
         try:
@@ -39,9 +90,7 @@ class ToolRuntime:
             return ToolResult(
                 request.request_id, Status.DENIED, "Required permission scope is not granted."
             )
-        if specification.risk in {Risk.HIGH, Risk.PRIVILEGED} and not (
-            approval and self.approvals.consume(request, approval)
-        ):
+        if not self._approved(request, specification, approval):
             return ToolResult(request.request_id, Status.DENIED, "Exact approval is required.")
         try:
             if request.operation == "create_folder":

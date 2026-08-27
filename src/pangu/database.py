@@ -8,9 +8,12 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -125,6 +128,37 @@ class ApplicationDiscoveryRunRow(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class MemoryRow(Base):
+    __tablename__ = "memory_records"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    namespace: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    subject: Mapped[str] = mapped_column(String(512), index=True, nullable=False)
+    content: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    importance: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_by: Mapped[str | None] = mapped_column(String(36))
+    __table_args__ = (UniqueConstraint("namespace", "kind", "subject", name="uq_memory_subject"),)
+
+
+class WorldFactRow(Base):
+    __tablename__ = "world_facts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    entity: Mapped[str] = mapped_column(String(512), index=True, nullable=False)
+    attribute: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    value: Mapped[object] = mapped_column(JSON, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("entity", "attribute", name="uq_world_fact"),)
+
+
 class DatabaseService:
     """The single SQLAlchemy engine/session owner for PANGU local state."""
 
@@ -137,6 +171,14 @@ class DatabaseService:
         self.lifecycle_state = "REGISTERED"
         self.last_error: str | None = None
         self.repository_ready = False
+
+    def _alembic_config(self) -> Config:
+        config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+        config.set_main_option("sqlalchemy.url", f"sqlite:///{self.path.as_posix()}")
+        return config
+
+    def _migration_head(self) -> str | None:
+        return ScriptDirectory.from_config(self._alembic_config()).get_current_head()
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,9 +195,7 @@ class DatabaseService:
             cursor.close()
 
         assert self._engine is not None
-        config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
-        config.set_main_option("sqlalchemy.url", f"sqlite:///{self.path.as_posix()}")
-        command.upgrade(config, "head")
+        command.upgrade(self._alembic_config(), "head")
         self._sessions = sessionmaker(self._engine, expire_on_commit=False)
         self._accepting = True
         self.repository_ready = True
@@ -184,13 +224,14 @@ class DatabaseService:
         return {"status": "ready", "journal_mode": str(mode), "foreign_keys": str(foreign_keys)}
 
     def health_details(self) -> dict[str, object]:
+        head = self._migration_head()
         if self._engine is None:
             return {
                 "component": "database",
                 "lifecycle_state": self.lifecycle_state,
                 "database_ready": False,
                 "migration_revision": None,
-                "migration_head": "0004_application_catalog_constraints",
+                "migration_head": head,
                 "migration_at_head": False,
                 "journal_mode": None,
                 "foreign_keys_enabled": False,
@@ -206,7 +247,7 @@ class DatabaseService:
             mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
             foreign_keys = connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
             busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
-        at_head = revision == "0004_application_catalog_constraints"
+        at_head = head is not None and revision == head
         ready = bool(
             at_head
             and str(mode).lower() == "wal"
@@ -219,7 +260,7 @@ class DatabaseService:
             "lifecycle_state": self.lifecycle_state,
             "database_ready": ready,
             "migration_revision": revision,
-            "migration_head": "0004_application_catalog_constraints",
+            "migration_head": head,
             "migration_at_head": at_head,
             "journal_mode": str(mode),
             "foreign_keys_enabled": foreign_keys == 1,
@@ -313,6 +354,10 @@ class MissionRow(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    goal: Mapped[str | None] = mapped_column(String)
+    priority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resumable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class MissionTaskRow(Base):
@@ -320,6 +365,14 @@ class MissionTaskRow(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(512))
+    operation: Mapped[str | None] = mapped_column(String(256))
+    arguments: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    dependencies: Mapped[list[str] | None] = mapped_column(JSON)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(String)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class MissionCheckpointRow(Base):

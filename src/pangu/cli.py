@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "command",
         choices=(
+            "run",
             "health",
             "models",
             "model-health",
@@ -69,12 +70,40 @@ async def run_command(args: argparse.Namespace) -> int:
     """Run the complete CLI lifecycle on one event loop."""
     container = RuntimeBuilder(resolve_application_root()).build()
     runtime = container.runtime
+    standalone_capture = args.command == "voice" and args.text == "capture-test"
+    file_action = args.command == "voice" and args.text == "vad-file-test"
+    event_bus_started_for_capture = False
     try:
-        file_action = args.command == "voice" and args.text == "vad-file-test"
-        if not file_action:
+        if standalone_capture:
+            # capture_test owns its microphone stream and worker. Starting the full runtime here
+            # would also start the realtime voice coordinator, causing two concurrent microphone
+            # streams to feed the same voice runtime and doubling captured audio.
+            await container.events.start()
+            event_bus_started_for_capture = True
+        elif not file_action:
             await runtime.start_async()
         text = args.text or ""
         exit_code = 0
+        if args.command == "run":
+            if container.realtime_voice is None:
+                raise RuntimeError("production realtime voice coordinator unavailable")
+            diagnostics = runtime.voice.diagnostics()
+            print(
+                json.dumps(
+                    {
+                        "state": "RUNNING",
+                        "voice_state": diagnostics.current_state,
+                        "audio_backend": diagnostics.audio_backend,
+                        "microphone": diagnostics.default_device_selector,
+                        "realtime_voice": True,
+                        "message": "PANGU is listening for the owner wake phrase. Press Ctrl+C to stop.",
+                    },
+                    default=str,
+                ),
+                flush=True,
+            )
+            await asyncio.Event().wait()
+            return 0
         if args.command == "health":
             result: object = runtime.db.health_details()
         elif args.command == "models":
@@ -302,6 +331,8 @@ async def run_command(args: argparse.Namespace) -> int:
         try:
             await container.gemini_provider.close()
         finally:
+            if event_bus_started_for_capture:
+                await container.events.stop()
             await runtime.stop_async()
 
 

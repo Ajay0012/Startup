@@ -10,6 +10,8 @@ from pydantic import BaseModel
 
 from pangu.runtime_builder import ServiceContainer
 
+from .phone_routes import phone_router
+
 
 def create_app(container: ServiceContainer) -> FastAPI:
     runtime = container.runtime
@@ -23,6 +25,7 @@ def create_app(container: ServiceContainer) -> FastAPI:
             await runtime.stop_async()
 
     app = FastAPI(title="PANGU local API", lifespan=lifespan)
+    app.include_router(phone_router(container))
 
     class ApplicationRequest(BaseModel):
         name: str
@@ -61,6 +64,7 @@ def create_app(container: ServiceContainer) -> FastAPI:
             "status": "ready" if database["database_ready"] else "degraded",
             "database": database,
             "models": {"gemini": container.gemini_provider.health()},
+            "phone": container.phone.status(),
         }
 
     @app.get("/ready")

@@ -1,0 +1,15 @@
+# PANGU full Python installation
+#
+# Run this file from the repository root (the Startup folder):
+#   py -3.12 -m pip install -r requirements.txt
+#
+# This intentionally delegates dependency versions to pyproject.toml so there is
+# only one source of truth for PANGU's core and optional Python dependencies.
+# It installs the editable PANGU package plus development, browser, desktop,
+# and vision feature groups.
+#
+# External/system components are not Python packages and therefore are not
+# installed here: .NET 10 SDK, JDK 17/Android SDK, Tesseract OCR, local Whisper
+# model files, wake-word model files, MediaPipe task model files, and Chromium.
+
+-e .[dev,browser,desktop,vision]

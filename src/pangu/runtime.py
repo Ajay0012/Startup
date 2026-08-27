@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from .applications import (
@@ -10,19 +11,40 @@ from .applications import (
     ApplicationWindowsResult,
     ResolutionResult,
     ResolutionStatus,
+    VerificationState,
 )
+from .browser import BrowserActionKind, BrowserActionRequest, BrowserRuntime, BrowserState
 from .capabilities import CapabilityCatalog
+from .computer_use import (
+    ComputerActionKind,
+    ComputerActionRequest,
+    ComputerTarget,
+    ComputerUseRuntime,
+    ComputerUseState,
+)
 from .contracts import CommandEnvelope, Status, ToolRequest, ToolResult
 from .database import DatabaseService
-from .events import EventBus
+from .events import EventBus, EventEnvelope
 from .language import LanguageRuntime
 from .lifecycle import LifecycleKernel, LifecycleService
-from .model_runtime import CognitiveDecision, CognitiveEngine, ContextAssembler, ModelRouter
+from .media import MediaIntelligenceRuntime, MediaPlaybackState, MediaRequest
+from .memory import MemoryKind, PersistentMemoryRuntime
+from .missions import PersistentMissionRuntime
+from .model_runtime import (
+    CognitiveDecision,
+    CognitiveEngine,
+    ContextAssembler,
+    ModelRequest,
+    ModelRole,
+    ModelRouter,
+)
 from .permissions import PermissionGrant, PermissionStore
+from .screen_perception import ScreenPerceptionRuntime
 from .security import ApprovalStore, SafetyGateway
-from .system_control import SystemControlResult, SystemControlRuntime
+from .system_control import SystemControlResult, SystemControlRuntime, SystemVerification
 from .tools import ToolRuntime
 from .voice import VoiceSessionRuntime
+from .world_model import PersonalWorldModel, WorldDelta
 
 
 class Runtime:
@@ -43,6 +65,12 @@ class Runtime:
         application_control: ApplicationControlRuntime,
         system_control: SystemControlRuntime,
         voice: VoiceSessionRuntime,
+        memory: PersistentMemoryRuntime | None = None,
+        world_model: PersonalWorldModel | None = None,
+        missions: PersistentMissionRuntime | None = None,
+        screen: ScreenPerceptionRuntime | None = None,
+        computer_use: ComputerUseRuntime | None = None,
+        browser: BrowserRuntime | None = None,
     ) -> None:
         self.root, self.settings = root, settings
         self.db, self.lifecycle, self.events, self.catalog = database, lifecycle, events, catalog
@@ -56,10 +84,18 @@ class Runtime:
         self.application_control = application_control
         self.system_control = system_control
         self.voice = voice
+        self.memory = memory
+        self.world_model = world_model
+        self.missions = missions
+        self.screen = screen
+        self.computer_use = computer_use
+        self.browser = browser
+        self.media = MediaIntelligenceRuntime(browser) if browser is not None else None
         grants = PermissionStore((PermissionGrant("filesystem.write:*", "default"),))
         self.approvals = ApprovalStore()
         self.tools = ToolRuntime(root, self.safety, self.catalog, grants, self.approvals)
         self.started = False
+        self.last_context: dict[str, object] = {}
 
         async def start_database() -> None:
             self.db.start()
@@ -88,48 +124,517 @@ class Runtime:
         await self.lifecycle.stop()
         self.started = False
 
+    def _grounding(self, text: str) -> tuple[str, ...]:
+        grounded: list[str] = []
+        if self.memory is not None:
+            try:
+                for item in self.memory.recall(text, limit=5):
+                    grounded.append(
+                        f"memory[{item.kind.value}] {item.subject}: {json.dumps(item.content, ensure_ascii=False, default=str)}"
+                    )
+            except RuntimeError:
+                pass
+        if self.world_model is not None:
+            try:
+                for fact in self.world_model.snapshot(limit=12):
+                    grounded.append(
+                        f"world {fact.entity}.{fact.attribute}={json.dumps(fact.value, ensure_ascii=False, default=str)}"
+                    )
+            except RuntimeError:
+                pass
+        return tuple(grounded[-12:])
+
     def decide(self, text: str) -> CognitiveDecision:
         intent = self.language.normalize(text)
-        self.context.assemble(intent.canonical_english)
+        self.last_context = self.context.assemble(intent.canonical_english, self._grounding(text))
         deterministic = intent.intent_name in {
             "create_folder",
             "battery_status",
             "open_application",
-            "mute_volume",
-            "volume_down",
+            "focus_application",
+            "minimize_application",
+            "maximize_application",
+            "restore_application",
+            "close_application",
+            "restart_application",
+            "get_volume",
             "set_volume",
             "increase_volume",
             "decrease_volume",
             "mute",
             "unmute",
             "toggle_mute",
+            "get_mute_state",
+            "mute_volume",
+            "volume_down",
+            "get_brightness",
             "set_brightness",
             "increase_brightness",
             "decrease_brightness",
+            "remember",
+            "recall_memory",
+            "screen_snapshot",
+            "invoke_control",
+            "focus_control",
+            "set_control_text",
+            "browser_navigate",
+            "browser_read",
+            "browser_click",
+            "browser_fill",
+            "browser_back",
+            "browser_forward",
+            "play_media",
         }
         route = self.model_router.route(intent.canonical_english, deterministic)
         return self.cognitive_engine.decide(intent.intent_name, route, intent.original_text)
+
+    @staticmethod
+    def _system_result(request_id: str, result: SystemControlResult) -> ToolResult:
+        if result.verification_state == SystemVerification.VERIFIED:
+            status = Status.VERIFIED
+        elif result.verification_state == SystemVerification.DENIED:
+            status = Status.DENIED
+        elif result.verification_state == SystemVerification.FAILED:
+            status = Status.FAILED
+        else:
+            status = Status.UNVERIFIED
+        if result.observed_value is not None:
+            message = f"{result.operation.replace('_', ' ')}: {result.observed_value}"
+        elif result.evidence.get("displays"):
+            message = "Display brightness information is available."
+        else:
+            message = (
+                result.normalized_error.value
+                if result.normalized_error
+                else result.observed_outcome
+            )
+        return ToolResult(request_id, status, message, result.public(), dict(result.evidence))
+
+    @staticmethod
+    def _application_result(request_id: str, result: ApplicationOperationResult) -> ToolResult:
+        if result.verification_state == VerificationState.VERIFIED:
+            status = Status.VERIFIED
+        elif result.verification_state == VerificationState.DENIED:
+            status = Status.DENIED
+        elif result.verification_state == VerificationState.FAILED:
+            status = Status.FAILED
+        else:
+            status = Status.UNVERIFIED
+        message = (
+            f"{result.requested_target}: {result.observed_outcome}"
+            if not result.normalized_error
+            else f"{result.requested_target}: {result.normalized_error}"
+        )
+        return ToolResult(
+            request_id, status, message, dict(result.evidence), {"confidence": result.confidence}
+        )
+
+    def _remember_turn(
+        self, command: CommandEnvelope, intent_name: str, result: ToolResult
+    ) -> None:
+        if self.memory is None:
+            return
+        self.memory.remember(
+            MemoryKind.EPISODIC,
+            f"turn {command.command_id}",
+            {
+                "utterance": command.original_utterance,
+                "source": command.source,
+                "intent": intent_name,
+                "status": result.status.value,
+                "result": result.message,
+            },
+            importance=0.45 if result.status == Status.VERIFIED else 0.35,
+            confidence=1.0,
+            source=command.source,
+        )
+
+    def _informational(self, command: CommandEnvelope, text: str) -> ToolResult:
+        grounding = self._grounding(text)
+        context = self.context.assemble(text, grounding)
+        route = self.model_router.route(text, deterministic_available=False)
+        role = route.role or ModelRole.FAST
+        prompt = (
+            "You are PANGU, a concise personal Windows assistant. Answer the owner's question naturally. "
+            "Use supplied local context only when relevant. Never claim a computer action happened unless a "
+            "tool result verified it. Do not expose secrets.\n\n"
+            f"Owner: {text}\n"
+            f"Local context: {json.dumps(context, ensure_ascii=False, default=str)}"
+        )
+        try:
+            result = asyncio.run(
+                self.model_router.gemini.generate_async(
+                    ModelRequest(
+                        prompt, role=role, trace_id=command.trace_id, mission_id="conversation"
+                    )
+                )
+            )
+        except RuntimeError:
+            return ToolResult(
+                command.command_id,
+                Status.UNVERIFIED,
+                "Conversational reasoning is unavailable in the current execution context.",
+            )
+        if result.text:
+            return ToolResult(
+                command.command_id,
+                Status.EXECUTED,
+                result.text.strip(),
+                {"provider": result.provider, "model": result.model},
+                {"health": result.health.value},
+            )
+        return ToolResult(
+            command.command_id,
+            Status.UNVERIFIED,
+            "Gemini reasoning is unavailable right now.",
+            {"provider": result.provider, "model": result.model},
+            {"health": result.health.value, "error": str(result.error) if result.error else None},
+        )
+
+    def _screen_result(self, command: CommandEnvelope) -> ToolResult:
+        if self.screen is None:
+            return ToolResult(
+                command.command_id, Status.UNVERIFIED, "Screen perception is unavailable."
+            )
+        snapshot = self.screen.capture()
+        if snapshot.verification_state != "VERIFIED":
+            return ToolResult(
+                command.command_id,
+                Status.UNVERIFIED,
+                "I couldn't read the active Windows accessibility tree.",
+                {"backend": snapshot.backend},
+                {"error": snapshot.normalized_error},
+            )
+        names = [
+            f"{item.control_type}: {item.name}"
+            for item in snapshot.elements
+            if item.name and not item.is_password
+        ][:12]
+        description = f"Active window: {snapshot.active_window_title or 'untitled'}. " + (
+            "Visible controls include " + "; ".join(names) if names else "No named controls found."
+        )
+        return ToolResult(
+            command.command_id,
+            Status.VERIFIED,
+            description,
+            {
+                "active_window_handle": snapshot.active_window_handle,
+                "element_count": len(snapshot.elements),
+                "truncated": snapshot.truncated,
+            },
+        )
+
+    def _computer_result(
+        self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]
+    ) -> ToolResult:
+        if self.computer_use is None or not bool(
+            getattr(self.settings, "pangu_computer_use_enabled", False)
+        ):
+            return ToolResult(
+                command.command_id,
+                Status.DENIED,
+                "Computer-use is disabled. Enable PANGU_COMPUTER_USE_ENABLED to allow typed UI Automation actions.",
+            )
+        action = {
+            "invoke_control": ComputerActionKind.INVOKE,
+            "focus_control": ComputerActionKind.FOCUS,
+            "set_control_text": ComputerActionKind.SET_TEXT,
+        }[intent_name]
+        native = self.computer_use.execute(
+            ComputerActionRequest(
+                action,
+                ComputerTarget(name=entities.get("target", "")),
+                text=entities.get("text"),
+            )
+        )
+        status = (
+            Status.VERIFIED
+            if native.state == ComputerUseState.VERIFIED
+            else Status.DENIED
+            if native.state == ComputerUseState.DENIED
+            else Status.FAILED
+            if native.state == ComputerUseState.FAILED
+            else Status.UNVERIFIED
+        )
+        return ToolResult(
+            command.command_id,
+            status,
+            native.message,
+            dict(native.evidence),
+            {"error": native.normalized_error},
+        )
+
+    def _browser_result(
+        self, command: CommandEnvelope, intent_name: str, entities: dict[str, str]
+    ) -> ToolResult:
+        if self.browser is None or not bool(getattr(self.settings, "pangu_browser_enabled", False)):
+            return ToolResult(
+                command.command_id,
+                Status.DENIED,
+                "PANGU browser automation is disabled. Enable PANGU_BROWSER_ENABLED to use the isolated browser.",
+            )
+        request = (
+            BrowserActionRequest(BrowserActionKind.NAVIGATE, url=entities.get("url"))
+            if intent_name == "browser_navigate"
+            else BrowserActionRequest(BrowserActionKind.READ)
+            if intent_name == "browser_read"
+            else BrowserActionRequest(
+                BrowserActionKind.CLICK,
+                target_name=entities.get("target"),
+                target_role=entities.get("role"),
+            )
+            if intent_name == "browser_click"
+            else BrowserActionRequest(
+                BrowserActionKind.FILL,
+                target_name=entities.get("target"),
+                target_role=entities.get("role"),
+                text=entities.get("text"),
+            )
+            if intent_name == "browser_fill"
+            else BrowserActionRequest(BrowserActionKind.BACK)
+            if intent_name == "browser_back"
+            else BrowserActionRequest(BrowserActionKind.FORWARD)
+        )
+        native = asyncio.run(self.browser.execute(request))
+        status = (
+            Status.VERIFIED
+            if native.state == BrowserState.VERIFIED
+            else Status.DENIED
+            if native.state == BrowserState.DENIED
+            else Status.FAILED
+            if native.state == BrowserState.FAILED
+            else Status.UNVERIFIED
+        )
+        message = native.message
+        if request.action == BrowserActionKind.READ and native.snapshot is not None:
+            page = native.snapshot
+            excerpt = " ".join(page.text.split())[:1200]
+            message = (
+                f"{page.title or 'Web page'}: {excerpt}"
+                if excerpt
+                else page.title or native.message
+            )
+        return ToolResult(
+            command.command_id,
+            status,
+            message,
+            {
+                "url": native.snapshot.url if native.snapshot else None,
+                "untrusted_content": native.snapshot.untrusted_content if native.snapshot else True,
+            },
+            {"error": native.normalized_error},
+        )
+
+    def _media_result(self, command: CommandEnvelope, entities: dict[str, str]) -> ToolResult:
+        if self.media is None or not bool(getattr(self.settings, "pangu_media_enabled", True)):
+            return ToolResult(
+                command.command_id,
+                Status.DENIED,
+                "PANGU media playback is disabled. Enable PANGU_MEDIA_ENABLED to allow media playback.",
+            )
+        native = asyncio.run(
+            self.media.play(
+                MediaRequest(
+                    entities.get("query", ""),
+                    source=MediaIntelligenceRuntime.source(entities.get("source")),
+                    direct_url=entities.get("url"),
+                )
+            )
+        )
+        status = (
+            Status.VERIFIED
+            if native.state == MediaPlaybackState.VERIFIED_PLAYING
+            else Status.DENIED
+            if native.state == MediaPlaybackState.DENIED
+            else Status.FAILED
+            if native.state == MediaPlaybackState.FAILED
+            else Status.UNVERIFIED
+        )
+        details: dict[str, object] = {
+            "playback_state": native.state.value,
+            "candidate": (
+                {
+                    "source": native.candidate.source.value,
+                    "title": native.candidate.title,
+                    "url": native.candidate.url,
+                    "score": native.candidate.score,
+                }
+                if native.candidate
+                else None
+            ),
+            "alternatives": [
+                {
+                    "source": item.source.value,
+                    "title": item.title,
+                    "url": item.url,
+                    "score": item.score,
+                }
+                for item in native.alternatives
+            ],
+            **native.evidence,
+        }
+        return ToolResult(
+            command.command_id,
+            status,
+            native.message,
+            details,
+            {"error": native.normalized_error},
+        )
 
     def command(self, text: str, source: str = "cli") -> ToolResult:
         if not self.started:
             raise RuntimeError("runtime not started")
         command = CommandEnvelope(text, source)
         intent = self.language.normalize(text)
+        record_original = True
+
         if intent.intent_name == "create_folder":
-            request = ToolRequest(
-                "filesystem", "create_folder", {"name": intent.entities.get("name", "New Folder")}
+            result = self.tools.execute(
+                ToolRequest(
+                    "filesystem",
+                    "create_folder",
+                    {"name": intent.entities.get("name", "New Folder")},
+                )
             )
         elif intent.intent_name == "battery_status":
-            request = ToolRequest("system", "battery_status", {})
+            result = self.tools.execute(ToolRequest("system", "battery_status", {}))
+        elif intent.intent_name in {
+            "open_application",
+            "focus_application",
+            "minimize_application",
+            "maximize_application",
+            "restore_application",
+            "close_application",
+            "restart_application",
+        }:
+            operation = intent.intent_name.removesuffix("_application")
+            app_result = self.application_control.operate(
+                operation, intent.entities.get("application", "").strip()
+            )
+            result = self._application_result(command.command_id, app_result)
+        elif intent.intent_name in {
+            "get_volume",
+            "set_volume",
+            "increase_volume",
+            "decrease_volume",
+            "mute",
+            "unmute",
+            "toggle_mute",
+            "get_mute_state",
+            "mute_volume",
+            "volume_down",
+        }:
+            operation = {"mute_volume": "mute", "volume_down": "decrease_volume"}.get(
+                intent.intent_name, intent.intent_name
+            )
+            raw_value = intent.entities.get("value", intent.entities.get("step"))
+            value = int(raw_value) if raw_value is not None else None
+            result = self._system_result(
+                command.command_id, self.system_control.audio(operation, value)
+            )
+            record_original = False
+        elif intent.intent_name in {
+            "get_brightness",
+            "set_brightness",
+            "increase_brightness",
+            "decrease_brightness",
+        }:
+            raw_value = intent.entities.get("value", intent.entities.get("step"))
+            value = int(raw_value) if raw_value is not None else None
+            result = self._system_result(
+                command.command_id, self.system_control.brightness(intent.intent_name, value)
+            )
+            record_original = False
+        elif intent.intent_name == "screen_snapshot":
+            result = self._screen_result(command)
+        elif intent.intent_name in {"invoke_control", "focus_control", "set_control_text"}:
+            result = self._computer_result(command, intent.intent_name, intent.entities)
+        elif intent.intent_name in {
+            "browser_navigate",
+            "browser_read",
+            "browser_click",
+            "browser_fill",
+            "browser_back",
+            "browser_forward",
+        }:
+            result = self._browser_result(command, intent.intent_name, intent.entities)
+        elif intent.intent_name == "play_media":
+            result = self._media_result(command, intent.entities)
+        elif intent.intent_name == "remember" and self.memory is not None:
+            text_to_remember = intent.entities.get("memory", "").strip()
+            memory = self.memory.remember(
+                MemoryKind.SEMANTIC,
+                text_to_remember[:160],
+                {"text": text_to_remember},
+                importance=0.8,
+                confidence=1.0,
+                source="owner",
+            )
+            result = ToolResult(
+                command.command_id,
+                Status.VERIFIED,
+                "I'll remember that.",
+                {"memory_id": memory.memory_id, "kind": memory.kind.value},
+            )
+        elif intent.intent_name == "recall_memory" and self.memory is not None:
+            matches = self.memory.recall(intent.entities.get("query", ""), limit=5)
+            message = (
+                "I remember: "
+                + "; ".join(str(item.content.get("text", item.subject)) for item in matches)
+                if matches
+                else "I don't have a matching stored memory."
+            )
+            result = ToolResult(
+                command.command_id,
+                Status.VERIFIED,
+                message,
+                {"matches": len(matches)},
+            )
+        elif intent.intent_name == "informational":
+            result = self._informational(command, text)
         else:
             result = ToolResult(
-                command.command_id, Status.UNVERIFIED, "No deterministic action selected."
+                command.command_id, Status.UNVERIFIED, "No verified local action selected."
             )
+
+        if record_original:
             self.db.record(command, result)
-            return result
-        result = self.tools.execute(request)
-        self.db.record(command, result)
+        self._remember_turn(command, intent.intent_name, result)
         return result
+
+    async def observe_world(
+        self,
+        entity: str,
+        attribute: str,
+        value: object,
+        *,
+        confidence: float = 1.0,
+        source: str = "runtime",
+        importance: float = 0.5,
+        message: str | None = None,
+    ) -> WorldDelta:
+        if self.world_model is None:
+            raise RuntimeError("world model is unavailable")
+        delta = self.world_model.observe(
+            entity, attribute, value, confidence=confidence, source=source
+        )
+        await self.events.publish(
+            EventEnvelope(
+                "world.delta",
+                {
+                    "entity": delta.entity,
+                    "attribute": delta.attribute,
+                    "previous": delta.previous,
+                    "current": delta.current,
+                    "changed": delta.changed,
+                    "confidence": delta.confidence,
+                    "source": delta.source,
+                    "importance": importance,
+                    "message": message or f"{entity} {attribute} changed.",
+                },
+            )
+        )
+        return delta
 
     def discover_applications(self) -> list[ApplicationRecord]:
         return self.application_control.discover()

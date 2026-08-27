@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from .contextual_nlu import ContextualLanguageResolver
+from .evaluation import IntelligenceEvaluationGate
+from .events import EventBus
+from .hud_bridge import HudStateBridge
+from .memory import PersistentMemoryRuntime
+from .multimodal import MultimodalContextFusion
+from .ocr_tesseract import TesseractOcrProvider
+from .predictive_intelligence import PredictiveBehaviorRuntime
+from .proactive_intelligence import ContextualInterruptionPolicy
+from .procedure_learning import ProcedureLearningRuntime
+from .resilience import ResilientLoadManager, SelfHealingSupervisor
+from .resilience_runtime import ResilienceRuntime
+from .screen_observer import ScreenObservationPolicy, ScreenObservationRuntime
+from .screen_perception import ScreenPerceptionRuntime
+from .screen_vision import PillowScreenCaptureProvider, ScreenVisionRuntime
+from .spatial_fusion import GestureHudFusionRuntime
+from .speaker_identity import IdentityTrustEngine, SpeakerIdentityRuntime
+from .windows_extended import ExtendedWindowsRuntime
+from .windows_identity import ContextualIdentitySecurity
+from .world_graph import PersonalWorldGraph
+from .world_model import PersonalWorldModel
+
+
+@dataclass
+class AdvancedIntelligenceServices:
+    """Single composition bundle for enhanced PANGU intelligence services."""
+
+    multimodal: MultimodalContextFusion
+    contextual_language: ContextualLanguageResolver
+    world_graph: PersonalWorldGraph
+    procedures: ProcedureLearningRuntime
+    predictive: PredictiveBehaviorRuntime
+    evaluation: IntelligenceEvaluationGate
+    speaker_identity: SpeakerIdentityRuntime
+    identity_trust: IdentityTrustEngine
+    identity_security: ContextualIdentitySecurity
+    interruption_policy: ContextualInterruptionPolicy
+    gesture_hud: GestureHudFusionRuntime
+    windows_extended: ExtendedWindowsRuntime
+    screen_vision: ScreenVisionRuntime
+    screen_observer: ScreenObservationRuntime
+    self_healing: SelfHealingSupervisor
+    model_load: ResilientLoadManager[object]
+    browser_load: ResilientLoadManager[object]
+    perception_load: ResilientLoadManager[object]
+    resilience: ResilienceRuntime
+    hud: HudStateBridge
+
+
+def build_advanced_intelligence(
+    root: Path,
+    events: EventBus,
+    memory: PersistentMemoryRuntime,
+    world_model: PersonalWorldModel,
+    screen: ScreenPerceptionRuntime,
+    *,
+    screen_observation_enabled: bool = False,
+    screen_observation_interval_seconds: float = 1.25,
+    screen_observation_ocr_enabled: bool = True,
+    screen_observation_suppress_password_contexts: bool = True,
+) -> AdvancedIntelligenceServices:
+    """Build enhanced services without starting hardware or creating parallel owners."""
+
+    multimodal = MultimodalContextFusion(max_signals=256, half_life_seconds=8.0)
+    self_healing = SelfHealingSupervisor(probe_timeout_seconds=3.0)
+    model_load: ResilientLoadManager[object] = ResilientLoadManager(
+        ["gemini-primary"], max_concurrency=4, max_queue=32
+    )
+    browser_load: ResilientLoadManager[object] = ResilientLoadManager(
+        ["browser"], max_concurrency=3, max_queue=20
+    )
+    perception_load: ResilientLoadManager[object] = ResilientLoadManager(
+        ["screen", "camera"],
+        max_concurrency=2,
+        max_queue=8,
+        endpoint_weights={"screen": 2, "camera": 1},
+    )
+    resilience = ResilienceRuntime(
+        events,
+        self_healing,
+        {
+            "model": model_load,
+            "browser": browser_load,
+            "perception": perception_load,
+        },
+    )
+    identity_trust = IdentityTrustEngine()
+    screen_vision = ScreenVisionRuntime(
+        PillowScreenCaptureProvider(),
+        TesseractOcrProvider(),
+    )
+    screen_observer = ScreenObservationRuntime(
+        screen,
+        multimodal,
+        events,
+        vision=screen_vision,
+        policy=ScreenObservationPolicy(
+            enabled=screen_observation_enabled,
+            interval_seconds=screen_observation_interval_seconds,
+            ocr_enabled=screen_observation_ocr_enabled,
+            suppress_password_contexts=screen_observation_suppress_password_contexts,
+        ),
+    )
+    return AdvancedIntelligenceServices(
+        multimodal=multimodal,
+        contextual_language=ContextualLanguageResolver(multimodal),
+        world_graph=PersonalWorldGraph(world_model),
+        procedures=ProcedureLearningRuntime(memory),
+        predictive=PredictiveBehaviorRuntime(history_limit=1024, minimum_support=3),
+        evaluation=IntelligenceEvaluationGate(allowed_relative_regression=0.02),
+        speaker_identity=SpeakerIdentityRuntime(),
+        identity_trust=identity_trust,
+        identity_security=ContextualIdentitySecurity(identity_trust),
+        interruption_policy=ContextualInterruptionPolicy(),
+        gesture_hud=GestureHudFusionRuntime(multimodal),
+        windows_extended=ExtendedWindowsRuntime(),
+        screen_vision=screen_vision,
+        screen_observer=screen_observer,
+        self_healing=self_healing,
+        model_load=model_load,
+        browser_load=browser_load,
+        perception_load=perception_load,
+        resilience=resilience,
+        hud=HudStateBridge(events, root / "runtime-data" / "overlay" / "state.json"),
+    )

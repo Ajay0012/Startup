@@ -6,11 +6,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from .database import DatabaseService
 from .repositories import ApprovalRecord, ApprovalRepository
+
+if TYPE_CHECKING:
+    from .capabilities import ToolSpecification
+    from .contracts import ToolRequest
 
 
 class ApprovalDenial(str, Enum):
@@ -138,6 +142,74 @@ class PersistentApprovalService:
             if record.reusable:
                 return None
             return None if repo.consume_once(approval_id, now) else ApprovalDenial.CONSUMED
+
+    @staticmethod
+    def _tool_binding(
+        request: ToolRequest,
+        specification: ToolSpecification,
+        target: str,
+        expires_at: datetime,
+        *,
+        approval_mode: str = "one_time",
+    ) -> ApprovalBinding:
+        return ApprovalBinding(
+            actor=request.actor,
+            tool_id=request.tool_id,
+            tool_version=specification.version,
+            operation=request.operation,
+            arguments=cast(dict[str, object], dict(request.arguments)),
+            target=target,
+            risk_level=specification.risk.value,
+            permission_scopes=specification.permission_scopes,
+            mission_id=request.mission_id,
+            session_id=request.session_id,
+            expires_at=expires_at,
+            approval_mode=approval_mode,
+        )
+
+    def issue_tool_request(
+        self,
+        request: ToolRequest,
+        specification: ToolSpecification,
+        target: str,
+        *,
+        seconds: int = 300,
+        approval_mode: str = "one_time",
+    ) -> str:
+        if not 5 <= seconds <= 3600:
+            raise ValueError("approval lifetime must be between 5 and 3600 seconds")
+        expires_at = datetime.now(UTC) + timedelta(seconds=seconds)
+        return self.issue(
+            self._tool_binding(
+                request,
+                specification,
+                target,
+                expires_at,
+                approval_mode=approval_mode,
+            )
+        )
+
+    def consume_tool_request(
+        self,
+        approval_id: str,
+        request: ToolRequest,
+        specification: ToolSpecification,
+        target: str,
+    ) -> ApprovalDenial | None:
+        with self._database.transaction() as session:
+            record = ApprovalRepository(session).get(approval_id)
+            if record is None:
+                return ApprovalDenial.NOT_FOUND
+            expires_at = _as_utc(record.expires_at)
+            approval_mode = record.approval_mode
+        binding = self._tool_binding(
+            request,
+            specification,
+            target,
+            expires_at,
+            approval_mode=approval_mode,
+        )
+        return self.consume(approval_id, binding)
 
     def revoke(self, approval_id: str) -> bool:
         with self._database.transaction() as session:

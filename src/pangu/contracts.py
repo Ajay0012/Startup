@@ -55,6 +55,8 @@ class ToolRequest:
     actor: str = "default"
     request_id: str = field(default_factory=lambda: str(uuid4()))
     idempotency_key: str = field(default_factory=lambda: str(uuid4()))
+    mission_id: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)

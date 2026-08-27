@@ -1,0 +1,45 @@
+name: PANGU One-Time Ruff Format
+
+on:
+  push:
+    branches:
+      - agent/pangu-production-core
+    paths:
+      - .github/workflows/format-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/pangu-production-core
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install formatter
+        run: python -m pip install 'ruff>=0.9'
+
+      - name: Format repository
+        run: python -m ruff format src tests apps
+
+      - name: Commit formatter output
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No formatting changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests apps
+          git commit -m 'style: apply Ruff formatter'
+          git push origin HEAD:agent/pangu-production-core
